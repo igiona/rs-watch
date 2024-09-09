@@ -1,6 +1,7 @@
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
 # replace nRF5340_xxAA with your chip as listed in `probe-rs chip list`
-runner = "probe-rs run --chip nRF5340_xxAA"
+# runner = "probe-rs run --chip nRF5340_xxAA"
+runner = "probe-rs run --chip nRF5340_xxAA --probe 1209:4853"
 
 [build]
 target = "thumbv8m.main-none-eabihf"

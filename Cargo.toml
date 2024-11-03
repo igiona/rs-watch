@@ -26,5 +26,11 @@ embedded-storage = "0.3.1"
 usbd-hid = "0.8.1"
 serde = { version = "1.0.136", default-features = false }
 
+slint = { version = "1.8.0", default-features = false, features = ["compat-1-2", "unsafe-single-threaded", "libm", "renderer-software"] }
+embedded-alloc = "0.6.0"
+
 [profile.release]
 debug = 2
+
+[build-dependencies]
+slint-build = "1.8.0"

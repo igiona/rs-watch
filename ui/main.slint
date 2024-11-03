@@ -1,0 +1,58 @@
+
+import { ProgressIndicator, Spinner, Slider, Switch } from "std-widgets.slint";
+
+export component RsWatchUi inherits Window {
+    height: 240px;
+    width: 240px;
+    Rectangle {
+        background: white;
+        border-width: 1px;
+        border-color: #ff0fd7;
+        border-radius: root.height / 2;
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                padding: 5px;
+                spacing: 10px;
+                ProgressIndicator {
+                    height: 10px;
+                    preferred-width: 80px;
+                    indeterminate: true;
+                }
+
+                Switch {
+                    text: "Test";
+                }
+
+                Rectangle { /* Filler */ }
+            }
+
+            HorizontalLayout {
+                alignment: center;
+                padding: 5px;
+                spacing: 10px;
+                Rectangle { /* Filler */ }
+
+                Rectangle {
+                    width: 70%;
+                    s := Slider {
+                        width: 100%;
+                    }
+                }
+
+                Rectangle { /* Filler */ }
+            }
+
+            HorizontalLayout {
+                alignment: center;
+                padding: 5px;
+                spacing: 10px;
+                Text {
+                    font-size: 3rem;
+                    text: s.value.round();
+                }
+            }
+        }
+    }
+}

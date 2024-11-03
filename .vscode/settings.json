@@ -1,4 +1,12 @@
 {
+    "[slint]": {
+        "editor.defaultFormatter": "Slint.slint",
+        "editor.formatOnSave": true
+    },
+    "[rust]": {
+        "editor.defaultFormatter": "rust-lang.rust-analyzer",
+        "editor.formatOnSave": true
+    },
     "workbench.colorCustomizations": {
         "activityBar.background": "#252D44",
         "titleBar.activeBackground": "#333F5F",
@@ -9,6 +17,8 @@
     "cSpell.words": [
         "defmt",
         "forceoff",
-        "gpio"
+        "gpio",
+        "rustc",
+        "slint"
     ]
 }

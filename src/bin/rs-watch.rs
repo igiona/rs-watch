@@ -35,7 +35,7 @@ slint::include_modules!();
 
 bind_interrupts!(struct Irqs {
     SERIAL0 => uarte::InterruptHandler<peripherals::SERIAL0>;
-    SERIAL1  => spim::InterruptHandler<peripherals::SERIAL1>;
+    SERIAL3  => spim::InterruptHandler<peripherals::SERIAL3>;
 });
 
 #[global_allocator]
@@ -108,22 +108,7 @@ pub async fn ui_task_runner(
     display_hw: DisplayHardwareInterface<'static>,
     touch_hw: TouchHardwareInterface,
 ) {
-    // Note that we use `ReusedBuffer` as parameter for MinimalSoftwareWindow to indicate
-    // that we just need to re-render what changed since the last frame.
-    // What's shown on the screen buffer is not in our RAM, but actually within the display itself.
-    // Only the changed part of the screen will be updated.
-    let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
-    // let window = MinimalSoftwareWindow::new(Default::default());
-
-    slint::platform::set_platform(alloc::boxed::Box::new(ZsWatchHwPlatform {
-        window: window.clone(),
-    }))
-    .unwrap();
-
-    const DISPLAY_WIDTH: u32 = 240;
-    const DISPLAY_HEIGHT: u32 = 240;
-    let mut line_buffer =
-        [slint::platform::software_renderer::Rgb565Pixel(0); DISPLAY_WIDTH as usize];
+    info!("Hello UI task...");
 
     // TODO Use a PWM to drive the backlight
     let mut backlight: Output = embassy_nrf::gpio::Output::new(
@@ -139,29 +124,33 @@ pub async fn ui_task_runner(
     let display_dc: Output = embassy_nrf::gpio::Output::new(
         display_hw.dc,
         embassy_nrf::gpio::Level::Low,
-        embassy_nrf::gpio::OutputDrive::Standard,
+        embassy_nrf::gpio::OutputDrive::HighDrive,
     );
     let mut touch_enable: Output = embassy_nrf::gpio::Output::new(
         touch_hw.level_shifter_enable,
         embassy_nrf::gpio::Level::Low,
         embassy_nrf::gpio::OutputDrive::Standard,
     );
+    info!("Enabling touch level shifter...");
     touch_enable.set_high(); // Enable touch interface
 
     let mut config = spim::Config::default();
-    config.frequency = spim::Frequency::M32;
-    let spim: spim::Spim<'_, peripherals::SERIAL1> = spim::Spim::new_txonly(
+    config.frequency = spim::Frequency::M16;
+    config.mode = spim::MODE_0;
+    let spim: spim::Spim<'_, peripherals::SERIAL3> = spim::Spim::new(
+        // let spim: spim::Spim<'_, peripherals::SERIAL3> = spim::Spim::new_txonly(
         display_hw.spi,
         Irqs,
         display_hw.clk,
-        display_hw.data,
+        display_hw.miso,
+        display_hw.mosi,
         config,
     );
 
     let display_cs: Output = embassy_nrf::gpio::Output::new(
         display_hw.cs,
-        embassy_nrf::gpio::Level::Low,
-        embassy_nrf::gpio::OutputDrive::Standard,
+        embassy_nrf::gpio::Level::High,
+        embassy_nrf::gpio::OutputDrive::HighDrive,
     );
     let exclusive_spim = ExclusiveDevice::new(spim, display_cs, Delay)
         .expect("The SPIM creation should be successful");
@@ -175,21 +164,56 @@ pub async fn ui_task_runner(
     )
     .into_buffered_graphics();
 
+    info!("Resetting display...");
     let mut delay = Delay;
-    display.reset(&mut display_reset, &mut delay).ok();
-    display.init(&mut delay).ok();
+    display.reset(&mut display_reset, &mut delay).unwrap();
+    info!("Initializing...");
+    display.init(&mut delay).unwrap();
+    let color: RawU16 = embedded_graphics::pixelcolor::Rgb565::WHITE.into();
+    let color: u16 = color.into_inner();
+    display.fill(color);
+    display.flush().unwrap();
     //display.set_display_rotation
+
+    info!("Backlight on...");
     backlight.set_high();
 
-    display.clear();
+    // info!("Clear display...");
+    // display.clear();
 
-    let _ui = RsWatchUi::new().expect("Unable to create the main window");
+    info!("Creating UI...");
+
+    // Note that we use `ReusedBuffer` as parameter for MinimalSoftwareWindow to indicate
+    // that we just need to re-render what changed since the last frame.
+    // What's shown on the screen buffer is not in our RAM, but actually within the display itself.
+    // Only the changed part of the screen will be updated.
+    let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+    // let window = MinimalSoftwareWindow::new(Default::default());
+
+    slint::platform::set_platform(alloc::boxed::Box::new(ZsWatchHwPlatform {
+        window: window.clone(),
+    }))
+    .unwrap();
+
+    info!("Instantiate RsWatchUi");
+    let ui = RsWatchUi::new();
+    info!("ui is ok {}", ui.is_ok());
+    let ui = ui.expect("Unable to create the main window");
 
     // ... setup callback and properties on `ui` ...
+
+    info!("Setting windows size...");
+
+    const DISPLAY_WIDTH: u32 = 240;
+    const DISPLAY_HEIGHT: u32 = 240;
+    let mut line_buffer =
+        [slint::platform::software_renderer::Rgb565Pixel(0); DISPLAY_WIDTH as usize];
 
     window.set_size(slint::PhysicalSize::new(DISPLAY_WIDTH, DISPLAY_HEIGHT));
 
     loop {
+        backlight.toggle();
+
         // Let Slint run the timer hooks and update animations.
         slint::platform::update_timers_and_animations();
 
@@ -203,6 +227,7 @@ pub async fn ui_task_runner(
 
         // Draw the scene if something needs to be drawn.
         window.draw_if_needed(|renderer| {
+            info!("Need to draw...");
             renderer.render_by_line(DisplayWrapper {
                 display: &mut display,
                 line_buffer: &mut line_buffer,
@@ -212,6 +237,7 @@ pub async fn ui_task_runner(
         if !window.has_active_animations() {
             // Try to put the MCU to sleep
             if let Some(duration) = slint::platform::duration_until_next_timer_update() {
+                info!("Sleep...");
                 Timer::after(Duration::from_millis(duration.as_millis() as u64)).await;
                 continue;
             }
@@ -234,9 +260,10 @@ struct DisplayHardwareInterface<'a> {
     blk: AnyPin,
     cs: AnyPin,
     dc: AnyPin,
-    data: AnyPin,
+    mosi: AnyPin,
+    miso: AnyPin,
     clk: AnyPin,
-    spi: PeripheralRef<'a, peripherals::SERIAL1>,
+    spi: PeripheralRef<'a, peripherals::SERIAL3>,
 }
 
 struct TouchHardwareInterface {
@@ -252,7 +279,7 @@ async fn main(spawner: Spawner) {
     // Initialize the allocator BEFORE you use it
     {
         use core::mem::MaybeUninit;
-        const HEAP_SIZE: usize = 1024;
+        const HEAP_SIZE: usize = 16 * 1024;
         static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
         unsafe { HEAP.init(addr_of_mut!(HEAP_MEM) as usize, HEAP_SIZE) }
     }
@@ -277,6 +304,8 @@ async fn main(spawner: Spawner) {
         .write(|w| w.forceoff().variant(network::forceoff::FORCEOFF_A::RELEASE));
     //unsafe { &*embassy_nrf::pac::RESET::ptr() }.network.forceoff.write(|w| w.forceoff().bit(network::forceoff::FORCEOFF_A::RELEASE.into()));
 
+    info!("Configuring SPI");
+
     let mut config = spim::Config::default();
     config.frequency = spim::Frequency::M32;
 
@@ -294,9 +323,10 @@ async fn main(spawner: Spawner) {
         blk: p.P0_23.degrade(),
         cs: p.P0_12.degrade(),
         dc: p.P0_11.degrade(),
-        data: p.P0_09.degrade(),
+        mosi: p.P0_09.degrade(),
+        miso: p.P0_05.degrade(),
         clk: p.P0_08.degrade(),
-        spi: p.SERIAL1.into_ref(),
+        spi: p.SERIAL3.into_ref(),
     };
 
     let touch_hw = TouchHardwareInterface {

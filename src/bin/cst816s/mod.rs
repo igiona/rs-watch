@@ -1,5 +1,8 @@
 //! Original work from https://github.com/jonlamb-gh/pinetime-rs/blob/master/pinetime-drivers/src/cst816s.rs [60e677ca545e64e05891c60fc1f9a2f0c540ddde]
 //! Hynitron CST816S touch panel driver
+//!
+//! Register description: https://github.com/fbiego/CST816S
+//!
 
 use core::fmt;
 
@@ -26,12 +29,6 @@ pub enum Gesture {
 }
 
 impl Gesture {
-    /*
-    fn as_u8(self) -> u8 {
-        self as u8
-    }
-    */
-
     fn from_u8(val: u8) -> Option<Self> {
         use Gesture::*;
         match val {
@@ -157,7 +154,7 @@ where
         self.read_touch_data()
     }
 
-    fn read_touch_data(&mut self) -> Result<TouchData, twim::Error> {
+    pub fn read_touch_data(&mut self) -> Result<TouchData, twim::Error> {
         let addr = [0];
         match self.twim.blocking_write_read_timeout(
             self.slave_address,
@@ -196,6 +193,7 @@ enum Register {
     WakeUp0 = 0x15,
     WakeUp1 = 0xA7,
     Motion = 0xEC,
+    _IrqPulseWidth = 0xED, // Value in 0.1ms units, range 1 - 200, default 10
     IrqCtl = 0xFA,
     //PowerMode = 0xA5,
 }

@@ -240,6 +240,7 @@ pub async fn ui_task_runner(
     set_display_brightness(&mut backlight, 80);
 
     let mut touch_notified_to_ui = false;
+    let mut last_touch: Option<Instant> = None;
     loop {
         // Let Slint run the timer hooks and update animations.
         slint::platform::update_timers_and_animations();
@@ -286,10 +287,56 @@ pub async fn ui_task_runner(
                         window.scale_factor(),
                         touch_notified_to_ui,
                     );
+                    match event {
+                        WindowEvent::PointerPressed {
+                            position: _,
+                            button: _,
+                        } => last_touch = Some(Instant::now()),
+                        WindowEvent::PointerReleased {
+                            position: _,
+                            button: _,
+                        } => last_touch = None,
+                        _ => {}
+                    }
                     window.dispatch_event(event);
                 }
                 Err(e) => error!("Touch read error => {}", e),
             };
+        } else if let Some(touch_instant) = last_touch {
+            // Check if the touch wasn't released for long, it seems like we miss interrupts.
+            // In this way we can be sure that we properly detect release actions.
+            if Instant::now()
+                .checked_duration_since(touch_instant)
+                .unwrap_or(Duration::from_secs(0))
+                > Duration::from_millis(50)
+            {
+                if let Ok(touch_data) = touch_controller.read_touch_data() {
+                    let event: WindowEvent;
+                    (touch_notified_to_ui, event) = evaluate_touch_data(
+                        touch_data,
+                        window.scale_factor(),
+                        touch_notified_to_ui,
+                    );
+                    match event {
+                        WindowEvent::PointerPressed {
+                            position: _,
+                            button: _,
+                        } => {
+                            debug!("It appears that we didn't miss the release event");
+                            last_touch = Some(Instant::now());
+                        }
+                        WindowEvent::PointerReleased {
+                            position: _,
+                            button: _,
+                        } => {
+                            warn!("It appears we did really miss the release event");
+                            last_touch = None;
+                        }
+                        _ => {}
+                    }
+                    window.dispatch_event(event);
+                }
+            }
         }
     }
 }

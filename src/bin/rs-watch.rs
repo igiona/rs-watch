@@ -15,6 +15,7 @@ use embassy_nrf::gpiote;
 use embassy_nrf::pac::reset::{self};
 use embassy_nrf::peripherals::{self, PWM0};
 use embassy_nrf::pwm::SimplePwm;
+use embassy_nrf::twim::Frequency;
 use embassy_nrf::{self, pac, pwm, twim};
 use embassy_nrf::{bind_interrupts, spim, uarte, Peripheral, PeripheralRef};
 use embassy_time::{Delay, Duration, Instant, Timer};
@@ -35,7 +36,8 @@ use gc9a01::{Gc9a01, SPIDisplayInterface};
 use slint::platform::software_renderer::{
     LineBufferProvider, MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel,
 };
-use slint::platform::Platform;
+use slint::platform::{Platform, PointerEventButton};
+use slint::LogicalPosition;
 use {defmt_rtt as _, panic_probe as _};
 
 slint::include_modules!();
@@ -173,7 +175,8 @@ pub async fn ui_task_runner(
 
     let interface = SPIDisplayInterface::new(exclusive_spim, display_dc);
 
-    let config = twim::Config::default();
+    let mut config = twim::Config::default();
+    config.frequency = Frequency::K1000;
     // config.scl_pullup = true;
     // config.sda_pullup = true;
     // config.scl_high_drive = true;
@@ -194,7 +197,7 @@ pub async fn ui_task_runner(
     let mut display = Gc9a01::new(
         interface,
         DisplayResolution240x240,
-        DisplayRotation::Rotate90,
+        DisplayRotation::Rotate180,
     )
     .into_buffered_graphics();
 
@@ -237,6 +240,7 @@ pub async fn ui_task_runner(
     info!("Backlight on...");
     set_display_brightness(&mut backlight, 80);
 
+    let mut touch_notified_to_ui = false;
     loop {
         // Let Slint run the timer hooks and update animations.
         slint::platform::update_timers_and_animations();
@@ -259,25 +263,48 @@ pub async fn ui_task_runner(
                 }
             } else {
                 // Give embassy some time to do other stuff, even though the UI want's to get refreshed
-                Timer::after(Duration::from_millis(5)).await;
+                Timer::after(Duration::from_millis(3)).await;
             }
         });
 
         if let select::Either::First(result) = tasks.await {
             match result {
-                Ok(event) => info!("Touch detected {:?}", event),
+                Ok(touch_data) => {
+                    //info!("Touch detected {:?}", touch_data);
+                    let event = if touch_data.is_touching {
+                        if !touch_notified_to_ui {
+                            touch_notified_to_ui = true;
+                            slint::platform::WindowEvent::PointerPressed {
+                                position: LogicalPosition {
+                                    x: touch_data.x as f32,
+                                    y: touch_data.y as f32,
+                                },
+                                button: PointerEventButton::Left,
+                            }
+                        } else {
+                            slint::platform::WindowEvent::PointerMoved {
+                                position: LogicalPosition {
+                                    x: touch_data.x as f32,
+                                    y: touch_data.y as f32,
+                                },
+                            }
+                        }
+                    } else {
+                        touch_notified_to_ui = false;
+                        slint::platform::WindowEvent::PointerReleased {
+                            position: LogicalPosition {
+                                x: touch_data.x as f32,
+                                y: touch_data.y as f32,
+                            },
+                            button: PointerEventButton::Left,
+                        }
+                    };
+                    window.dispatch_event(event);
+                }
                 Err(e) => error!("Touch read error => {}", e),
             };
         }
     }
-}
-
-struct _DisplayHardwareInterface<SPI: embedded_hal::spi::SpiDevice> {
-    reset: AnyPin,
-    blk: AnyPin,
-    cs: AnyPin,
-    dc: AnyPin,
-    spi: SPI,
 }
 
 struct BacklightControl {
@@ -309,7 +336,7 @@ async fn main(spawner: Spawner) {
     // Initialize the allocator BEFORE you use it
     {
         use core::mem::MaybeUninit;
-        const HEAP_SIZE: usize = 16 * 1024;
+        const HEAP_SIZE: usize = 24 * 1024;
         static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
         unsafe { HEAP.init(addr_of_mut!(HEAP_MEM) as usize, HEAP_SIZE) }
     }
@@ -374,13 +401,7 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(ui_task_runner(display_hw, touch_hw)));
 
     loop {
-        // info!("Main loop has still nothing to do...");
-        Timer::after_secs(1).await;
+        debug!("Main loop has still nothing to do...");
+        Timer::after_secs(10).await;
     }
 }
-
-// struct MySpim<'a, T: Instance> {
-//     spim: spim::Spim<'a, T>,
-// }
-
-// impl<'a> embedded_hal::spi::SpiDevice for MySpim<'a, T: Instance> {}

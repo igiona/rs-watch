@@ -255,16 +255,27 @@ pub async fn ui_task_runner(
                 display.flush().unwrap();
             });
 
-            if !window.has_active_animations() {
+            let sleep_duration = if !window.has_active_animations() {
                 // Try to put the MCU to sleep
                 if let Some(duration) = slint::platform::duration_until_next_timer_update() {
-                    info!("Sleep...");
-                    Timer::after(Duration::from_millis(duration.as_millis() as u64)).await;
+                    info!(
+                        "Sleep until next UI update in {}ms...",
+                        duration.as_millis()
+                    );
+                    Some(Duration::from_millis(duration.as_millis() as u64))
+                } else {
+                    None
                 }
             } else {
-                // Give embassy some time to do other stuff, even though the UI want's to get refreshed
-                Timer::after(Duration::from_millis(3)).await;
-            }
+                None
+            };
+
+            Timer::after(sleep_duration.unwrap_or({
+                // If Slint doesn't give us time,
+                // we give embassy anyways some time to do other stuff at the cost of a slightly less responsive UI
+                Duration::from_millis(3)
+            }))
+            .await;
         });
 
         if let select::Either::First(result) = tasks.await {

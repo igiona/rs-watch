@@ -176,11 +176,11 @@ pub async fn ui_task_runner(
     let interface = SPIDisplayInterface::new(exclusive_spim, display_dc);
 
     let mut config = twim::Config::default();
-    config.frequency = Frequency::K1000;
+    config.frequency = Frequency::K400;
     // config.scl_pullup = true;
     // config.sda_pullup = true;
-    // config.scl_high_drive = true;
-    // config.sda_high_drive = true;
+    config.scl_high_drive = true;
+    config.sda_high_drive = true;
     let i2c = twim::Twim::new(touch_hw.i2c, Irqs, touch_hw.sda, touch_hw.scl, config);
     let mut touch_controller = Cst816s::new(CST816S_ADDRESS, i2c, touch_reset, touch_hw.int);
 

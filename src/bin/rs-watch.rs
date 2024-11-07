@@ -88,7 +88,6 @@ impl<T: DrawTarget<Color = Rgb565>> LineBufferProvider for DisplayWrapper<'_, T>
         render_fn: impl FnOnce(&mut [Self::TargetPixel]),
     ) {
         // Render into the line
-        warn!("Rendering {} from {} to {}", line, range.start, range.end);
         render_fn(&mut self.line_buffer[range.clone()]);
 
         // Send the line to the screen using DrawTarget::fill_contiguous
@@ -247,11 +246,11 @@ pub async fn ui_task_runner(
 
         // Draw the scene if something needs to be drawn.
         window.draw_if_needed(|renderer| {
-            info!("Need to draw...");
             renderer.render_by_line(DisplayWrapper {
                 display: &mut display,
                 line_buffer: &mut line_buffer,
             });
+            display.flush().unwrap();
         });
 
         if !window.has_active_animations() {

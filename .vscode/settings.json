@@ -18,7 +18,12 @@
         "defmt",
         "forceoff",
         "gpio",
+        "miso",
+        "mosi",
+        "pixelcolor",
+        "prescaler",
         "rustc",
-        "slint"
+        "slint",
+        "spim"
     ]
 }

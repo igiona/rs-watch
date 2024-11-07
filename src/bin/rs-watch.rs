@@ -3,12 +3,15 @@
 extern crate alloc;
 
 use core::ptr::addr_of_mut;
+use core::time;
 
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_nrf::gpio::{AnyPin, Output, Pin as _};
-use embassy_nrf::pac::reset::network;
-use embassy_nrf::peripherals::{self};
+use embassy_nrf::pac::reset::{self};
+use embassy_nrf::peripherals::{self, PWM0};
+use embassy_nrf::pwm::SimplePwm;
+use embassy_nrf::{self, pac, pwm};
 use embassy_nrf::{bind_interrupts, spim, uarte, Peripheral, PeripheralRef};
 use embassy_time::{Delay, Duration, Instant, Timer};
 use embedded_alloc::LlffHeap as Heap;
@@ -85,6 +88,7 @@ impl<T: DrawTarget<Color = Rgb565>> LineBufferProvider for DisplayWrapper<'_, T>
         render_fn: impl FnOnce(&mut [Self::TargetPixel]),
     ) {
         // Render into the line
+        warn!("Rendering {} from {} to {}", line, range.start, range.end);
         render_fn(&mut self.line_buffer[range.clone()]);
 
         // Send the line to the screen using DrawTarget::fill_contiguous
@@ -103,6 +107,12 @@ impl<T: DrawTarget<Color = Rgb565>> LineBufferProvider for DisplayWrapper<'_, T>
     }
 }
 
+fn set_display_brightness(pwm: &mut SimplePwm<'_, PWM0>, brightness_pct: u8) {
+    let brightness_pct = 100 - brightness_pct.min(100); // TODO: remove this as soon as it is clear why the PWM's duty get's 100% with a value of 0
+    let duty = (((pwm.max_duty() as u32) * (brightness_pct.min(100) as u32)) / 100) as u16;
+    pwm.set_duty(0, duty);
+}
+
 #[embassy_executor::task]
 pub async fn ui_task_runner(
     display_hw: DisplayHardwareInterface<'static>,
@@ -111,11 +121,12 @@ pub async fn ui_task_runner(
     info!("Hello UI task...");
 
     // TODO Use a PWM to drive the backlight
-    let mut backlight: Output = embassy_nrf::gpio::Output::new(
-        display_hw.blk,
-        embassy_nrf::gpio::Level::Low,
-        embassy_nrf::gpio::OutputDrive::HighDrive,
-    );
+    let mut backlight = SimplePwm::new_1ch(display_hw.blk.pwm, display_hw.blk.pin);
+    backlight.set_prescaler(pwm::Prescaler::Div128);
+    backlight.set_duty(0, 0);
+    backlight.set_max_duty(1024);
+    backlight.set_ch0_drive(embassy_nrf::gpio::OutputDrive::HighDrive);
+
     let mut display_reset: Output = embassy_nrf::gpio::Output::new(
         display_hw.reset,
         embassy_nrf::gpio::Level::Low,
@@ -166,6 +177,7 @@ pub async fn ui_task_runner(
 
     info!("Resetting display...");
     let mut delay = Delay;
+
     display.reset(&mut display_reset, &mut delay).unwrap();
     info!("Initializing...");
     display.init(&mut delay).unwrap();
@@ -176,7 +188,9 @@ pub async fn ui_task_runner(
     //display.set_display_rotation
 
     info!("Backlight on...");
-    backlight.set_high();
+    set_display_brightness(&mut backlight, 100);
+
+    Timer::after(Duration::from_secs(5)).await;
 
     // info!("Clear display...");
     // display.clear();
@@ -211,8 +225,14 @@ pub async fn ui_task_runner(
 
     window.set_size(slint::PhysicalSize::new(DISPLAY_WIDTH, DISPLAY_HEIGHT));
 
+    let mut brightness_pct: u8 = 0;
     loop {
-        backlight.toggle();
+        brightness_pct = if brightness_pct >= 100 {
+            0
+        } else {
+            brightness_pct + 1
+        };
+        set_display_brightness(&mut backlight, brightness_pct);
 
         // Let Slint run the timer hooks and update animations.
         slint::platform::update_timers_and_animations();
@@ -255,9 +275,14 @@ struct _DisplayHardwareInterface<SPI: embedded_hal::spi::SpiDevice> {
     spi: SPI,
 }
 
+struct BacklightControl {
+    pin: AnyPin,
+    pwm: PeripheralRef<'static, PWM0>,
+}
+
 struct DisplayHardwareInterface<'a> {
     reset: AnyPin,
-    blk: AnyPin,
+    blk: BacklightControl,
     cs: AnyPin,
     dc: AnyPin,
     mosi: AnyPin,
@@ -298,11 +323,11 @@ async fn main(spawner: Spawner) {
     info!("Hello rs-watch!");
 
     info!("Waking-up NET core...");
-    unsafe { &*embassy_nrf::pac::RESET::ptr() }
-        .network
-        .forceoff
-        .write(|w| w.forceoff().variant(network::forceoff::FORCEOFF_A::RELEASE));
-    //unsafe { &*embassy_nrf::pac::RESET::ptr() }.network.forceoff.write(|w| w.forceoff().bit(network::forceoff::FORCEOFF_A::RELEASE.into()));
+
+    pac::RESET
+        .network()
+        .forceoff()
+        .write(|w| w.set_forceoff(reset::vals::Forceoff::RELEASE));
 
     info!("Configuring SPI");
 
@@ -319,8 +344,12 @@ async fn main(spawner: Spawner) {
     //     spi: spim,
     // };
     let display_hw = DisplayHardwareInterface {
-        reset: p.P0_03.degrade(),
-        blk: p.P0_23.degrade(),
+        reset: p.P0_21.degrade(),
+        // reset: p.P0_03.degrade(),
+        blk: BacklightControl {
+            pin: p.P0_23.degrade(),
+            pwm: p.PWM0.into_ref(),
+        },
         cs: p.P0_12.degrade(),
         dc: p.P0_11.degrade(),
         mosi: p.P0_09.degrade(),

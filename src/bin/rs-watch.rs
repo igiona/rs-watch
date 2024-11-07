@@ -417,6 +417,11 @@ async fn main(spawner: Spawner) {
     // unwrap!(uart.write(&buf).await);
     info!("Hello rs-watch!");
 
+    let div = pac::clock::vals::Hclk::DIV1; // Desired Main clock divider (aka 128MHz)
+    pac::CLOCK.hfclkctrl().write(|w| w.set_hclk(div));
+    let cpu_clock_speed = 128 / (pac::CLOCK.hfclkctrl().read().hclk() as u8 + 1);
+    info!("Running at {}MHz", cpu_clock_speed);
+
     info!("Waking-up NET core...");
 
     pac::RESET

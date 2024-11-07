@@ -3,7 +3,6 @@
 extern crate alloc;
 
 use core::ptr::addr_of_mut;
-use core::time;
 
 use defmt::*;
 use embassy_executor::Spawner;
@@ -11,7 +10,7 @@ use embassy_nrf::gpio::{AnyPin, Output, Pin as _};
 use embassy_nrf::pac::reset::{self};
 use embassy_nrf::peripherals::{self, PWM0};
 use embassy_nrf::pwm::SimplePwm;
-use embassy_nrf::{self, pac, pwm};
+use embassy_nrf::{self, pac, pwm, twim};
 use embassy_nrf::{bind_interrupts, spim, uarte, Peripheral, PeripheralRef};
 use embassy_time::{Delay, Duration, Instant, Timer};
 use embedded_alloc::LlffHeap as Heap;
@@ -38,6 +37,7 @@ slint::include_modules!();
 
 bind_interrupts!(struct Irqs {
     SERIAL0 => uarte::InterruptHandler<peripherals::SERIAL0>;
+    SERIAL2  => twim::InterruptHandler<peripherals::SERIAL2>;
     SERIAL3  => spim::InterruptHandler<peripherals::SERIAL3>;
 });
 
@@ -111,7 +111,7 @@ fn set_display_brightness(pwm: &mut SimplePwm<'_, PWM0>, brightness_pct: u8) {
 #[embassy_executor::task]
 pub async fn ui_task_runner(
     display_hw: DisplayHardwareInterface<'static>,
-    touch_hw: TouchHardwareInterface,
+    touch_hw: TouchHardwareInterface<'static>,
 ) {
     info!("Hello UI task...");
 
@@ -161,6 +161,13 @@ pub async fn ui_task_runner(
         .expect("The SPIM creation should be successful");
 
     let interface = SPIDisplayInterface::new(exclusive_spim, display_dc);
+
+    let config = twim::Config::default();
+    // config.scl_pullup = true;
+    // config.sda_pullup = true;
+    // config.scl_high_drive = true;
+    // config.sda_high_drive = true;
+    let mut i2c = twim::Twim::new(touch_hw.i2c, Irqs, touch_hw.sda, touch_hw.scl, config);
 
     let mut display = Gc9a01::new(
         interface,
@@ -266,12 +273,13 @@ struct DisplayHardwareInterface<'a> {
     spi: PeripheralRef<'a, peripherals::SERIAL3>,
 }
 
-struct TouchHardwareInterface {
+struct TouchHardwareInterface<'a> {
     level_shifter_enable: AnyPin,
     reset: AnyPin,
     scl: AnyPin,
     sda: AnyPin,
     int: AnyPin,
+    i2c: PeripheralRef<'a, peripherals::SERIAL2>,
 }
 
 #[embassy_executor::main]
@@ -338,6 +346,7 @@ async fn main(spawner: Spawner) {
         scl: p.P1_03.degrade(),
         sda: p.P1_02.degrade(),
         int: p.P1_00.degrade(),
+        i2c: p.SERIAL2.into_ref(),
     };
 
     info!("Spawning UI task...");

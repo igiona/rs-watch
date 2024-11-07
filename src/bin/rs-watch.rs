@@ -70,10 +70,6 @@ impl Platform for ZsWatchHwPlatform {
     // }
 }
 
-// struct DisplayWrapper<'a, Display> {
-//     display: Display,
-//     buffer: &'a mut [Rgb565Pixel],
-// }
 struct DisplayWrapper<'a, T> {
     display: &'a mut T,
     line_buffer: &'a mut [Rgb565Pixel],
@@ -125,6 +121,7 @@ pub async fn ui_task_runner(
     backlight.set_duty(0, 0);
     backlight.set_max_duty(1024);
     backlight.set_ch0_drive(embassy_nrf::gpio::OutputDrive::HighDrive);
+    set_display_brightness(&mut backlight, 0);
 
     let mut display_reset: Output = embassy_nrf::gpio::Output::new(
         display_hw.reset,
@@ -145,14 +142,12 @@ pub async fn ui_task_runner(
     touch_enable.set_high(); // Enable touch interface
 
     let mut config = spim::Config::default();
-    config.frequency = spim::Frequency::M16;
+    config.frequency = spim::Frequency::M32;
     config.mode = spim::MODE_0;
-    let spim: spim::Spim<'_, peripherals::SERIAL3> = spim::Spim::new(
-        // let spim: spim::Spim<'_, peripherals::SERIAL3> = spim::Spim::new_txonly(
+    let spim: spim::Spim<'_, peripherals::SERIAL3> = spim::Spim::new_txonly(
         display_hw.spi,
         Irqs,
         display_hw.clk,
-        display_hw.miso,
         display_hw.mosi,
         config,
     );
@@ -170,29 +165,16 @@ pub async fn ui_task_runner(
     let mut display = Gc9a01::new(
         interface,
         DisplayResolution240x240,
-        DisplayRotation::Rotate180,
+        DisplayRotation::Rotate90,
     )
     .into_buffered_graphics();
 
     info!("Resetting display...");
     let mut delay = Delay;
-
     display.reset(&mut display_reset, &mut delay).unwrap();
     info!("Initializing...");
     display.init(&mut delay).unwrap();
-    let color: RawU16 = embedded_graphics::pixelcolor::Rgb565::WHITE.into();
-    let color: u16 = color.into_inner();
-    display.fill(color);
     display.flush().unwrap();
-    //display.set_display_rotation
-
-    info!("Backlight on...");
-    set_display_brightness(&mut backlight, 100);
-
-    Timer::after(Duration::from_secs(5)).await;
-
-    // info!("Clear display...");
-    // display.clear();
 
     info!("Creating UI...");
 
@@ -224,15 +206,10 @@ pub async fn ui_task_runner(
 
     window.set_size(slint::PhysicalSize::new(DISPLAY_WIDTH, DISPLAY_HEIGHT));
 
-    let mut brightness_pct: u8 = 0;
-    loop {
-        brightness_pct = if brightness_pct >= 100 {
-            0
-        } else {
-            brightness_pct + 1
-        };
-        set_display_brightness(&mut backlight, brightness_pct);
+    info!("Backlight on...");
+    set_display_brightness(&mut backlight, 80);
 
+    loop {
         // Let Slint run the timer hooks and update animations.
         slint::platform::update_timers_and_animations();
 
@@ -285,7 +262,6 @@ struct DisplayHardwareInterface<'a> {
     cs: AnyPin,
     dc: AnyPin,
     mosi: AnyPin,
-    miso: AnyPin,
     clk: AnyPin,
     spi: PeripheralRef<'a, peripherals::SERIAL3>,
 }
@@ -352,7 +328,6 @@ async fn main(spawner: Spawner) {
         cs: p.P0_12.degrade(),
         dc: p.P0_11.degrade(),
         mosi: p.P0_09.degrade(),
-        miso: p.P0_05.degrade(),
         clk: p.P0_08.degrade(),
         spi: p.SERIAL3.into_ref(),
     };

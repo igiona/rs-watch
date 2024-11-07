@@ -2,11 +2,16 @@
 #![no_main]
 extern crate alloc;
 
+mod cst816s;
+
 use core::ptr::addr_of_mut;
 
+use cst816s::Cst816s;
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_nrf::gpio::{AnyPin, Output, Pin as _};
+use embassy_futures::select::{self, select};
+use embassy_nrf::gpio::{self, AnyPin, Output, Pin as _, Pull};
+use embassy_nrf::gpiote;
 use embassy_nrf::pac::reset::{self};
 use embassy_nrf::peripherals::{self, PWM0};
 use embassy_nrf::pwm::SimplePwm;
@@ -43,6 +48,9 @@ bind_interrupts!(struct Irqs {
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
+
+/// CST816S I2C address
+pub const CST816S_ADDRESS: u8 = 0x15;
 
 struct ZsWatchHwPlatform {
     window: alloc::rc::Rc<MinimalSoftwareWindow>,
@@ -138,8 +146,11 @@ pub async fn ui_task_runner(
         embassy_nrf::gpio::Level::Low,
         embassy_nrf::gpio::OutputDrive::Standard,
     );
-    info!("Enabling touch level shifter...");
-    touch_enable.set_high(); // Enable touch interface
+    let touch_reset: Output = embassy_nrf::gpio::Output::new(
+        touch_hw.reset,
+        embassy_nrf::gpio::Level::High,
+        embassy_nrf::gpio::OutputDrive::Standard,
+    );
 
     let mut config = spim::Config::default();
     config.frequency = spim::Frequency::M32;
@@ -167,7 +178,18 @@ pub async fn ui_task_runner(
     // config.sda_pullup = true;
     // config.scl_high_drive = true;
     // config.sda_high_drive = true;
-    let mut i2c = twim::Twim::new(touch_hw.i2c, Irqs, touch_hw.sda, touch_hw.scl, config);
+    let i2c = twim::Twim::new(touch_hw.i2c, Irqs, touch_hw.sda, touch_hw.scl, config);
+    let mut touch_controller = Cst816s::new(CST816S_ADDRESS, i2c, touch_reset, touch_hw.int);
+
+    let mut delay = Delay;
+
+    info!("Enabling touch level shifter...");
+    touch_enable.set_high(); // Enable touch interface
+    Timer::after(Duration::from_millis(10)).await; // Give the HW some time to settle
+    info!("Initializing touch controller...");
+    if let Err(e) = touch_controller.init(&mut delay) {
+        error!("Failed to initialized the touch controller! => {}", e);
+    }
 
     let mut display = Gc9a01::new(
         interface,
@@ -177,7 +199,6 @@ pub async fn ui_task_runner(
     .into_buffered_graphics();
 
     info!("Resetting display...");
-    let mut delay = Delay;
     display.reset(&mut display_reset, &mut delay).unwrap();
     info!("Initializing...");
     display.init(&mut delay).unwrap();
@@ -200,7 +221,7 @@ pub async fn ui_task_runner(
     info!("Instantiate RsWatchUi");
     let ui = RsWatchUi::new();
     info!("ui is ok {}", ui.is_ok());
-    let ui = ui.expect("Unable to create the main window");
+    let _ui = ui.expect("Unable to create the main window");
 
     // ... setup callback and properties on `ui` ...
 
@@ -220,33 +241,34 @@ pub async fn ui_task_runner(
         // Let Slint run the timer hooks and update animations.
         slint::platform::update_timers_and_animations();
 
-        // Check the touch screen or input device using your driver.
-        // TODO
-        // if let Some(event) = check_for_touch_event(/*...*/) {
-        //     // convert the event from the driver into a `slint::platform::WindowEvent`
-        //     // and pass it to the window.
-        //     window.dispatch_event(event);
-        // }
-
-        // Draw the scene if something needs to be drawn.
-        window.draw_if_needed(|renderer| {
-            renderer.render_by_line(DisplayWrapper {
-                display: &mut display,
-                line_buffer: &mut line_buffer,
+        let tasks = select(touch_controller.wait_event(), async {
+            // Draw the scene if something needs to be drawn.
+            window.draw_if_needed(|renderer| {
+                renderer.render_by_line(DisplayWrapper {
+                    display: &mut display,
+                    line_buffer: &mut line_buffer,
+                });
+                display.flush().unwrap();
             });
-            display.flush().unwrap();
+
+            if !window.has_active_animations() {
+                // Try to put the MCU to sleep
+                if let Some(duration) = slint::platform::duration_until_next_timer_update() {
+                    info!("Sleep...");
+                    Timer::after(Duration::from_millis(duration.as_millis() as u64)).await;
+                }
+            } else {
+                // Give embassy some time to do other stuff, even though the UI want's to get refreshed
+                Timer::after(Duration::from_millis(5)).await;
+            }
         });
 
-        if !window.has_active_animations() {
-            // Try to put the MCU to sleep
-            if let Some(duration) = slint::platform::duration_until_next_timer_update() {
-                info!("Sleep...");
-                Timer::after(Duration::from_millis(duration.as_millis() as u64)).await;
-                continue;
-            }
+        if let select::Either::First(result) = tasks.await {
+            match result {
+                Ok(event) => info!("Touch detected {:?}", event),
+                Err(e) => error!("Touch read error => {}", e),
+            };
         }
-        // Five embassy some time to do other stuff, even though the UI want's to get refreshed
-        Timer::after(Duration::from_millis(5)).await;
     }
 }
 
@@ -278,7 +300,7 @@ struct TouchHardwareInterface<'a> {
     reset: AnyPin,
     scl: AnyPin,
     sda: AnyPin,
-    int: AnyPin,
+    int: gpiote::InputChannel<'a>,
     i2c: PeripheralRef<'a, peripherals::SERIAL2>,
 }
 
@@ -317,18 +339,15 @@ async fn main(spawner: Spawner) {
     let mut config = spim::Config::default();
     config.frequency = spim::Frequency::M32;
 
-    // let mut spim: spim::Spim<'_, peripherals::SERIAL1> =
-    //     spim::Spim::new_txonly(p.SERIAL1, Irqs, p.P0_08, p.P0_09, config);
-    // let display_hw = DisplayHardwareInterface {
-    //     reset: p.P0_03.degrade(),
-    //     blk: p.P0_23.degrade(),
-    //     cs: p.P0_12.degrade(),
-    //     dc: p.P0_11.degrade(),
-    //     spi: spim,
-    // };
+    let touch_int: gpiote::InputChannel<'_> = gpiote::InputChannel::new(
+        p.GPIOTE_CH0,
+        gpio::Input::new(p.P1_00, Pull::Up),
+        gpiote::InputChannelPolarity::HiToLo,
+    );
+
     let display_hw = DisplayHardwareInterface {
-        reset: p.P0_21.degrade(),
-        // reset: p.P0_03.degrade(),
+        reset: p.P0_21.degrade(), // nrf5340 DK
+        // reset: p.P0_03.degrade(), //zs-WatchHw
         blk: BacklightControl {
             pin: p.P0_23.degrade(),
             pwm: p.PWM0.into_ref(),
@@ -343,9 +362,11 @@ async fn main(spawner: Spawner) {
     let touch_hw = TouchHardwareInterface {
         level_shifter_enable: p.P1_01.degrade(),
         reset: p.P0_20.degrade(),
-        scl: p.P1_03.degrade(),
-        sda: p.P1_02.degrade(),
-        int: p.P1_00.degrade(),
+        scl: p.P1_08.degrade(), // nrf5340 DK
+        // scl: p.P1_03.degrade(),//zs-WatchHw
+        sda: p.P1_07.degrade(), // nrf5340 DK
+        // sda: p.P1_02.degrade(), //zs-WatchHw
+        int: touch_int,
         i2c: p.SERIAL2.into_ref(),
     };
 
@@ -353,7 +374,7 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(ui_task_runner(display_hw, touch_hw)));
 
     loop {
-        info!("Main loop has still nothing to do...");
+        // info!("Main loop has still nothing to do...");
         Timer::after_secs(1).await;
     }
 }

@@ -1,33 +1,19 @@
 //! Original work from https://github.com/jonlamb-gh/pinetime-rs/blob/master/pinetime-drivers/src/cst816s.rs [60e677ca545e64e05891c60fc1f9a2f0c540ddde]
 //! Hynitron CST816S touch panel driver
-//!
-//! Pins:
-//! * P0.10 : Reset
-//! * P0.28 : Interrupt (signal to the CPU when a touch event is detected)
-//! * P0.06 : I²C SDA
-//! * P0.07 : I²C SCL
-//!
-//! I²C
-//! Device address : 0x15
-//! Frequency : from 10Khz to 400Khz
 
-use crate::hal::{
-    gpio::{p0, Floating, Input, Output, Pin, PushPull},
-    gpiote::GpioteChannel,
-    prelude::{OutputPin, _embedded_hal_blocking_delay_DelayMs as DelayMs},
-    twim::{self, Error, Twim},
-};
 use core::fmt;
 
-/// CST816S I2C address
-pub const ADDRESS: u8 = 0x15;
+use embassy_nrf::{
+    gpio::Output,
+    gpiote,
+    twim::{self, Twim},
+};
+use embassy_time::Duration;
+use embedded_hal::delay::DelayNs;
 
-/// The TWI device should work @ up to 400Khz but there is a HW bug which prevent it from
-/// respecting correct timings. According to erratas heet, this magic value makes it run
-/// at ~390Khz with correct timings.
-pub const MAX_FREQUENCY: u32 = 0x06200000;
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_millis(5);
 
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, defmt::Format)]
 #[repr(u8)]
 pub enum Gesture {
     SlideDown = 0x01,
@@ -68,7 +54,7 @@ impl fmt::Display for Gesture {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, defmt::Format)]
 pub struct TouchData {
     pub x: u16,
     pub y: u16,
@@ -107,48 +93,48 @@ impl fmt::Display for TouchData {
     }
 }
 
-pub type ResetPin = p0::P0_10<Output<PushPull>>;
-pub type InterruptPin = p0::P0_28<Input<Floating>>;
-
 /// CST816S driver
-pub struct Cst816s<TWIM> {
-    twim: Twim<TWIM>,
-    reset_pin: ResetPin,
-    _int_pin: Pin<Input<Floating>>,
+pub struct Cst816s<'a, TWIM>
+where
+    TWIM: twim::Instance,
+{
+    slave_address: u8,
+    twim: Twim<'a, TWIM>,
+    reset_pin: Output<'a>,
+    int_channel: gpiote::InputChannel<'a>,
     buffer: [u8; 7],
 }
 
-impl<TWIM> Cst816s<TWIM>
+impl<'a, TWIM> Cst816s<'a, TWIM>
 where
     TWIM: twim::Instance,
 {
     pub fn new(
-        twim: Twim<TWIM>,
-        reset_pin: ResetPin,
-        int_pin: InterruptPin,
-        channel: &GpioteChannel<'_>,
+        salve_address: u8,
+        twim: Twim<'a, TWIM>,
+        reset_pin: Output<'a>,
+        int_channel: gpiote::InputChannel<'a>,
     ) -> Self {
-        let int_pin = int_pin.degrade();
-        channel.input_pin(&int_pin).lo_to_hi().enable_interrupt();
         Cst816s {
+            slave_address: salve_address,
             twim,
             reset_pin,
-            _int_pin: int_pin,
+            int_channel,
             buffer: [0; 7],
         }
     }
 
-    pub fn init<T: DelayMs<u8>>(&mut self, delay: &mut T) -> Result<(), Error> {
-        self.reset_pin.set_high().unwrap();
+    pub fn init<T: DelayNs>(&mut self, delay: &mut T) -> Result<(), twim::Error> {
+        self.reset_pin.set_high();
         delay.delay_ms(50);
-        self.reset_pin.set_low().unwrap();
+        self.reset_pin.set_low();
         delay.delay_ms(5);
-        self.reset_pin.set_high().unwrap();
+        self.reset_pin.set_high();
         delay.delay_ms(50);
 
-        let _ = self.read_register(Register::Wakeup0)?;
+        let _ = self.read_register(Register::WakeUp0)?;
         delay.delay_ms(5);
-        let _ = self.read_register(Register::Wakeup1)?;
+        let _ = self.read_register(Register::WakeUp1)?;
         delay.delay_ms(5);
 
         // [2] EnConLR - Continuous operation can slide around
@@ -166,38 +152,40 @@ where
         Ok(())
     }
 
-    /*
-    pub fn sleep<T: DelayMs<u8>>(&mut self, delay: &mut T) -> Result<(), Error> {
-        self.reset_pin.set_low().unwrap();
-        delay.delay_ms(5);
-        self.reset_pin.set_high().unwrap();
-        delay.delay_ms(50);
-        self.write_register(Register::PowerMode, 0x03)?;
-        Ok(())
+    pub async fn wait_event(&mut self) -> Result<TouchData, twim::Error> {
+        self.int_channel.wait().await;
+        self.read_touch_data()
     }
-    */
 
-    pub fn read_touch_data(&mut self) -> Option<TouchData> {
+    fn read_touch_data(&mut self) -> Result<TouchData, twim::Error> {
         let addr = [0];
-        match self
-            .twim
-            .copy_write_then_read(ADDRESS, &addr, &mut self.buffer)
-        {
-            Err(_e) => None,
-            Ok(()) => Some(TouchData::from_le_bytes(&self.buffer)),
+        match self.twim.blocking_write_read_timeout(
+            self.slave_address,
+            &addr,
+            &mut self.buffer,
+            DEFAULT_READ_TIMEOUT,
+        ) {
+            Err(e) => Err(e),
+            Ok(()) => Ok(TouchData::from_le_bytes(&self.buffer)),
         }
     }
 
-    fn read_register(&mut self, register: Register) -> Result<u8, Error> {
+    fn read_register(&mut self, register: Register) -> Result<u8, twim::Error> {
         let tx = [register.addr()];
         let mut rx = [0_u8; 1];
-        self.twim.copy_write_then_read(ADDRESS, &tx, &mut rx)?;
+        self.twim.blocking_write_read_timeout(
+            self.slave_address,
+            &tx,
+            &mut rx,
+            DEFAULT_READ_TIMEOUT,
+        )?;
         Ok(rx[0])
     }
 
-    fn write_register(&mut self, register: Register, value: u8) -> Result<(), Error> {
+    fn write_register(&mut self, register: Register, value: u8) -> Result<(), twim::Error> {
         let tx = [register.addr(), value];
-        self.twim.write(ADDRESS, &tx)?;
+        self.twim
+            .blocking_write_timeout(self.slave_address, &tx, DEFAULT_READ_TIMEOUT)?;
         Ok(())
     }
 }
@@ -205,8 +193,8 @@ where
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 #[repr(u8)]
 enum Register {
-    Wakeup0 = 0x15,
-    Wakeup1 = 0xA7,
+    WakeUp0 = 0x15,
+    WakeUp1 = 0xA7,
     Motion = 0xEC,
     IrqCtl = 0xFA,
     //PowerMode = 0xA5,

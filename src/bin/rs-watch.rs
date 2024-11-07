@@ -6,7 +6,7 @@ mod cst816s;
 
 use core::ptr::addr_of_mut;
 
-use cst816s::Cst816s;
+use cst816s::{Cst816s, TouchData};
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::select::{self, select};
@@ -36,8 +36,7 @@ use gc9a01::{Gc9a01, SPIDisplayInterface};
 use slint::platform::software_renderer::{
     LineBufferProvider, MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel,
 };
-use slint::platform::{Platform, PointerEventButton};
-use slint::LogicalPosition;
+use slint::platform::{Platform, PointerEventButton, WindowEvent};
 use {defmt_rtt as _, panic_probe as _};
 
 slint::include_modules!();
@@ -281,41 +280,47 @@ pub async fn ui_task_runner(
         if let select::Either::First(result) = tasks.await {
             match result {
                 Ok(touch_data) => {
-                    //info!("Touch detected {:?}", touch_data);
-                    let event = if touch_data.is_touching {
-                        if !touch_notified_to_ui {
-                            touch_notified_to_ui = true;
-                            slint::platform::WindowEvent::PointerPressed {
-                                position: LogicalPosition {
-                                    x: touch_data.x as f32,
-                                    y: touch_data.y as f32,
-                                },
-                                button: PointerEventButton::Left,
-                            }
-                        } else {
-                            slint::platform::WindowEvent::PointerMoved {
-                                position: LogicalPosition {
-                                    x: touch_data.x as f32,
-                                    y: touch_data.y as f32,
-                                },
-                            }
-                        }
-                    } else {
-                        touch_notified_to_ui = false;
-                        slint::platform::WindowEvent::PointerReleased {
-                            position: LogicalPosition {
-                                x: touch_data.x as f32,
-                                y: touch_data.y as f32,
-                            },
-                            button: PointerEventButton::Left,
-                        }
-                    };
+                    let event: WindowEvent;
+                    (touch_notified_to_ui, event) = evaluate_touch_data(
+                        touch_data,
+                        window.scale_factor(),
+                        touch_notified_to_ui,
+                    );
                     window.dispatch_event(event);
                 }
                 Err(e) => error!("Touch read error => {}", e),
             };
         }
     }
+}
+
+fn evaluate_touch_data(
+    touch_data: TouchData,
+    scale_factor: f32,
+    mut touch_notified_to_ui: bool,
+) -> (bool, WindowEvent) {
+    let touch_position =
+        slint::PhysicalPosition::new(touch_data.x as _, touch_data.y as _).to_logical(scale_factor);
+    let event = if touch_data.is_touching {
+        if !touch_notified_to_ui {
+            touch_notified_to_ui = true;
+            slint::platform::WindowEvent::PointerPressed {
+                position: touch_position,
+                button: PointerEventButton::Left,
+            }
+        } else {
+            slint::platform::WindowEvent::PointerMoved {
+                position: touch_position,
+            }
+        }
+    } else {
+        touch_notified_to_ui = false;
+        slint::platform::WindowEvent::PointerReleased {
+            position: touch_position,
+            button: PointerEventButton::Left,
+        }
+    };
+    (touch_notified_to_ui, event)
 }
 
 struct BacklightControl {

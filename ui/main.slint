@@ -10,28 +10,26 @@ export component RsWatchUi inherits Window {
         border-color: #ff0fd7;
         border-radius: root.height / 2;
         VerticalLayout {
-            alignment: center;
-            HorizontalLayout {
-                alignment: center;
-                padding: 5px;
-                spacing: 10px;
+            alignment: end;
+            Rectangle {
                 ProgressIndicator {
                     height: 10px;
                     preferred-width: 80px;
-                    indeterminate: true;
+                    // indeterminate: true;
+                    progress: s.value / 100;
                 }
-
-                Switch {
-                    text: "Test";
-                }
-
-                Rectangle { /* Filler */ }
             }
 
             HorizontalLayout {
                 alignment: center;
-                padding: 5px;
-                spacing: 10px;
+                height: 60px;
+                Switch {
+                    text: "Test";
+                }
+            }
+
+            HorizontalLayout {
+                alignment: center;
                 Rectangle { /* Filler */ }
 
                 Rectangle {
@@ -49,7 +47,7 @@ export component RsWatchUi inherits Window {
                 padding: 5px;
                 spacing: 10px;
                 Text {
-                    font-size: 3rem;
+                    font-size: 80px;
                     text: s.value.round();
                 }
             }

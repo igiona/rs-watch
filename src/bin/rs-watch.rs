@@ -15,7 +15,7 @@ use embassy_nrf::gpiote;
 use embassy_nrf::pac::reset::{self};
 use embassy_nrf::peripherals::{self, PWM0};
 use embassy_nrf::pwm::SimplePwm;
-use embassy_nrf::twim::Frequency;
+use embassy_nrf::twim::{Frequency, Twim};
 use embassy_nrf::{self, pac, pwm, twim};
 use embassy_nrf::{bind_interrupts, spim, uarte, Peripheral, PeripheralRef};
 use embassy_time::{Delay, Duration, Instant, Timer};
@@ -43,6 +43,7 @@ slint::include_modules!();
 
 bind_interrupts!(struct Irqs {
     SERIAL0 => uarte::InterruptHandler<peripherals::SERIAL0>;
+    SERIAL1  => twim::InterruptHandler<peripherals::SERIAL1>;
     SERIAL2  => twim::InterruptHandler<peripherals::SERIAL2>;
     SERIAL3  => spim::InterruptHandler<peripherals::SERIAL3>;
 });
@@ -52,6 +53,10 @@ static HEAP: Heap = Heap::empty();
 
 /// CST816S I2C address
 pub const CST816S_ADDRESS: u8 = 0x15;
+
+/// nPM1300
+pub const NPM1300_ADDRESS: u8 = 0x6B;
+pub const NPM1300_DEFAULT_TIMEOUT: Duration = Duration::from_millis(10);
 
 struct ZsWatchHwPlatform {
     window: alloc::rc::Rc<MinimalSoftwareWindow>,
@@ -124,6 +129,7 @@ pub async fn ui_task_runner(
 ) {
     info!("Hello UI task...");
 
+    info!("Initializing display &  touch ...");
     // TODO Use a PWM to drive the backlight
     let mut backlight = SimplePwm::new_1ch(display_hw.blk.pwm, display_hw.blk.pin);
     backlight.set_prescaler(pwm::Prescaler::Div128);
@@ -429,6 +435,53 @@ async fn main(spawner: Spawner) {
         .forceoff()
         .write(|w| w.set_forceoff(reset::vals::Forceoff::RELEASE));
 
+    info!("Initializing PM...");
+    let mut config = twim::Config::default();
+    config.frequency = Frequency::K400;
+    let mut sensor_i2c = twim::Twim::new(p.SERIAL1, Irqs, p.P0_10, p.P0_07, config);
+    let mut read_buf = [0u8];
+
+    match sensor_i2c.blocking_write_read_timeout(
+        NPM1300_ADDRESS,
+        &0xE0_00u16.to_be_bytes(), // Error register
+        &mut read_buf,
+        NPM1300_DEFAULT_TIMEOUT,
+    ) {
+        Ok(_) => {
+            info!("nPM found!");
+
+            info!("Turning LDO1 on...");
+            pm_write_reg(&mut sensor_i2c, 0x08_0C, 23).ok(); // LDSW1VOUTSEL register, set V_LDO1 to 3V3
+            pm_write_reg(&mut sensor_i2c, 0x08_08, 1).ok(); // LDSW1LDOSEL register, set LDSW1 to LDO1 (VDD-Display = V_LDO1)
+            pm_write_reg(&mut sensor_i2c, 0x08_00, 1).ok(); // TASKLDSW1SET register, set enable for LDO1SW = 1
+
+            loop {
+                match sensor_i2c.blocking_write_read_timeout(
+                    NPM1300_ADDRESS,
+                    &0x08_04u16.to_be_bytes(), // LDSWSTATUS
+                    &mut read_buf,
+                    NPM1300_DEFAULT_TIMEOUT,
+                ) {
+                    Ok(_) => {
+                        warn!("Current LDO status {}", read_buf[0]);
+                        if read_buf[0] & 0b1_0010 == 0b1_0010 {
+                            info!("LDO1 is on!");
+                            break;
+                        } else {
+                            info!("Still waiting for LDO1...");
+                            Timer::after_millis(2).await; // Backoff a bit
+                        }
+                    }
+                    Err(_) => {
+                        error!("Communication error while setting LDO1");
+                        break;
+                    }
+                }
+            }
+        }
+        Err(_) => warn!("nPM module not found!"),
+    };
+
     info!("Configuring SPI");
 
     let mut config = spim::Config::default();
@@ -441,8 +494,10 @@ async fn main(spawner: Spawner) {
     );
 
     let display_hw = DisplayHardwareInterface {
-        reset: p.P0_21.degrade(), // nrf5340 DK
-        // reset: p.P0_03.degrade(), //zs-WatchHw
+        #[cfg(feature = "hw-board-dk")]
+        reset: p.P0_21.degrade(),
+        #[cfg(feature = "hw-board-zs")]
+        reset: p.P0_03.degrade(),
         blk: BacklightControl {
             pin: p.P0_23.degrade(),
             pwm: p.PWM0.into_ref(),
@@ -457,10 +512,14 @@ async fn main(spawner: Spawner) {
     let touch_hw = TouchHardwareInterface {
         level_shifter_enable: p.P1_01.degrade(),
         reset: p.P0_20.degrade(),
-        scl: p.P1_08.degrade(), // nrf5340 DK
-        // scl: p.P1_03.degrade(),//zs-WatchHw
-        sda: p.P1_07.degrade(), // nrf5340 DK
-        // sda: p.P1_02.degrade(), //zs-WatchHw
+        #[cfg(feature = "hw-board-dk")]
+        scl: p.P1_08.degrade(),
+        #[cfg(feature = "hw-board-zs")]
+        scl: p.P1_03.degrade(),
+        #[cfg(feature = "hw-board-dk")]
+        sda: p.P1_07.degrade(),
+        #[cfg(feature = "hw-board-zs")]
+        sda: p.P1_02.degrade(),
         int: touch_int,
         i2c: p.SERIAL2.into_ref(),
     };
@@ -472,4 +531,18 @@ async fn main(spawner: Spawner) {
         debug!("Main loop has still nothing to do...");
         Timer::after_secs(10).await;
     }
+}
+
+fn pm_write_reg<TWIM>(
+    sensor_i2c: &mut Twim<'_, TWIM>,
+    reg: u16,
+    value: u8,
+) -> Result<(), twim::Error>
+where
+    TWIM: twim::Instance,
+{
+    let reg = reg.to_be_bytes();
+    let w = [reg[0], reg[1], value];
+
+    sensor_i2c.blocking_write_timeout(NPM1300_ADDRESS, &w, NPM1300_DEFAULT_TIMEOUT)
 }

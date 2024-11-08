@@ -4,6 +4,11 @@ name = "rs-watch"
 version = "0.1.0"
 license = "MIT"
 
+[features]
+default=["hw-board-zs"]
+hw-board-zs=[]
+hw-board-dk=[]
+
 [dependencies]
 embassy-futures = { version = "0.1.0" , git = "https://github.com/embassy-rs/embassy.git", branch = "main" }
 embassy-sync = { version = "0.6.0" , git = "https://github.com/embassy-rs/embassy.git", branch = "main", features = ["defmt"] }

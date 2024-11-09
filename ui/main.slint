@@ -1,7 +1,9 @@
 
-import { ProgressIndicator, Spinner, Slider, Switch } from "std-widgets.slint";
+import { ProgressIndicator, Spinner, Slider, Switch, ListView, GroupBox } from "std-widgets.slint";
+import { MenuItem } from "menu_item.slint";
 
 export component RsWatchUi inherits Window {
+    callback menu_item_click(string);
     height: 240px;
     width: 240px;
     Rectangle {
@@ -9,6 +11,83 @@ export component RsWatchUi inherits Window {
         border-width: 1px;
         border-color: #ff0fd7;
         border-radius: root.height / 2;
+        Flickable {
+            property <length> icon_size: 32px; // This has currently to match the SVG size :'(
+            property <length> items_spacing: 12px;
+            vertical-stretch: 0;
+            viewport-x: 0px;
+            viewport-y: 0px;
+            VerticalLayout {
+                padding-left: 30px;
+                padding-top: 40px;
+                padding-bottom: self.padding-top;
+                spacing: items_spacing;
+                alignment: start;
+                MenuItem {
+                    title: "Settings";
+                    icon: @image-url("../images/icon_settings.svg");
+                    icon_size: icon_size;
+                    clicked => {
+                        menu_item_click(self.title);
+                    }
+                }
+
+                MenuItem {
+                    title: "Home";
+                    icon: @image-url("../images/icon_home.svg");
+                    icon_size: icon_size;
+                    clicked => {
+                        menu_item_click(self.title);
+                    }
+                }
+
+                MenuItem {
+                    title: "Timer";
+                    icon: @image-url("../images/icon_timer.svg");
+                    icon_size: icon_size;
+                    clicked => {
+                        menu_item_click(self.title);
+                    }
+                }
+
+                MenuItem {
+                    title: "Media";
+                    icon: @image-url("../images/icon_media.svg");
+                    icon_size: icon_size;
+                    clicked => {
+                        menu_item_click(self.title);
+                    }
+                }
+
+                MenuItem {
+                    title: "Lock";
+                    icon: @image-url("../images/icon_lock.svg");
+                    icon_size: icon_size;
+                    clicked => {
+                        menu_item_click(self.title);
+                    }
+                }
+
+                MenuItem {
+                    title: "Bluetooth ®";
+                    icon: @image-url("../images/icon_bluetooth_settings.svg");
+                    icon_size: icon_size;
+                    clicked => {
+                        menu_item_click(self.title);
+                    }
+                }
+
+                MenuItem {
+                    title: "Alarm";
+                    icon: @image-url("../images/icon_alarm.svg");
+                    icon_size: icon_size;
+                    clicked => {
+                        menu_item_click(self.title);
+                    }
+                }
+            }
+        }
+/*
         VerticalLayout {
             alignment: end;
             Rectangle {
@@ -51,6 +130,6 @@ export component RsWatchUi inherits Window {
                     text: s.value.round();
                 }
             }
-        }
+        }*/
     }
 }

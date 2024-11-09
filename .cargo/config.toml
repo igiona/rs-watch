@@ -8,3 +8,4 @@ target = "thumbv8m.main-none-eabihf"
 
 [env]
 DEFMT_LOG = "trace"
+SLINT_FONT_SIZE = "16,24"

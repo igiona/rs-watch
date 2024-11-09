@@ -227,9 +227,10 @@ pub async fn ui_task_runner(
     info!("Instantiate RsWatchUi");
     let ui = RsWatchUi::new();
     info!("ui is ok {}", ui.is_ok());
-    let _ui = ui.expect("Unable to create the main window");
+    let ui = ui.expect("Unable to create the main window");
 
     // ... setup callback and properties on `ui` ...
+    ui.on_menu_item_click(|i| info!("Clicked menu {}", i.as_str()));
 
     info!("Setting windows size...");
 
@@ -244,7 +245,11 @@ pub async fn ui_task_runner(
     set_display_brightness(&mut backlight, 80);
 
     let mut touch_notified_to_ui = false;
-    let mut last_touch: Option<Instant> = None;
+    let mut last_touch_instant: Option<Instant> = None;
+    let mut last_touch_data: Option<TouchData> = None;
+
+    let mut first_touch_event: Option<Instant> = None;
+
     loop {
         // Let Slint run the timer hooks and update animations.
         slint::platform::update_timers_and_animations();
@@ -261,7 +266,7 @@ pub async fn ui_task_runner(
             let sleep_duration = if !window.has_active_animations() {
                 // Try to put the MCU to sleep
                 if let Some(duration) = slint::platform::duration_until_next_timer_update() {
-                    info!(
+                    debug!(
                         "Sleep until next UI update in {}ms...",
                         duration.as_millis()
                     );
@@ -284,91 +289,153 @@ pub async fn ui_task_runner(
         if let select::Either::First(result) = tasks.await {
             match result {
                 Ok(touch_data) => {
-                    let event: WindowEvent;
+                    let event: Option<WindowEvent>;
                     (touch_notified_to_ui, event) = evaluate_touch_data(
                         touch_data,
+                        last_touch_data,
                         window.scale_factor(),
                         touch_notified_to_ui,
                     );
-                    match event {
-                        WindowEvent::PointerPressed {
+                    last_touch_data = Some(touch_data);
+                    if touch_data.is_touching {
+                        if let Some(WindowEvent::PointerPressed {
                             position: _,
                             button: _,
-                        } => last_touch = Some(Instant::now()),
-                        WindowEvent::PointerReleased {
-                            position: _,
-                            button: _,
-                        } => last_touch = None,
-                        _ => {}
+                        }) = event
+                        {
+                            first_touch_event = Some(Instant::now());
+                        }
+                        if let Some(WindowEvent::PointerMoved { position: _ }) = event {
+                            if let Some(first_touch_event) = first_touch_event {
+                                let i = Instant::now()
+                                    .checked_duration_since(first_touch_event)
+                                    .unwrap();
+                                info!("Delta T {}ms", i.as_millis());
+                            }
+                            first_touch_event = None;
+                        }
+                        last_touch_instant = Some(Instant::now());
+                    } else {
+                        last_touch_instant = None;
                     }
-                    window.dispatch_event(event);
+                    if let Some(event) = event {
+                        info!("Event {}", PrintableWindowEvent(&event));
+                        window.dispatch_event(event);
+                    }
                 }
                 Err(e) => error!("Touch read error => {}", e),
             };
-        } else if let Some(touch_instant) = last_touch {
+        } else if let Some(touch_instant) = last_touch_instant {
             // Check if the touch wasn't released for long, it seems like we miss interrupts.
             // In this way we can be sure that we properly detect release actions.
             if Instant::now()
                 .checked_duration_since(touch_instant)
                 .unwrap_or(Duration::from_secs(0))
-                > Duration::from_millis(50)
+                > Duration::from_millis(100)
             {
                 if let Ok(touch_data) = touch_controller.read_touch_data() {
-                    let event: WindowEvent;
+                    let event: Option<WindowEvent>;
                     (touch_notified_to_ui, event) = evaluate_touch_data(
                         touch_data,
+                        last_touch_data,
                         window.scale_factor(),
                         touch_notified_to_ui,
                     );
                     match event {
-                        WindowEvent::PointerPressed {
+                        Some(WindowEvent::PointerReleased {
                             position: _,
                             button: _,
-                        } => {
-                            debug!("It appears that we didn't miss the release event");
-                            last_touch = Some(Instant::now());
-                        }
-                        WindowEvent::PointerReleased {
-                            position: _,
-                            button: _,
-                        } => {
+                        }) => {
                             warn!("It appears we did really miss the release event");
-                            last_touch = None;
+                            window.dispatch_event(event.expect("Safe thanks to the prev. checks"));
                         }
-                        _ => {}
+                        _ => {
+                            debug!("It appears that we didn't miss the release event after all...");
+                        }
                     }
-                    window.dispatch_event(event);
+                    last_touch_instant = None;
                 }
             }
         }
     }
 }
 
+struct PrintableWindowEvent<'a>(&'a WindowEvent);
+impl<'a> Format for PrintableWindowEvent<'a> {
+    fn format(&self, fmt: Formatter) {
+        match &self.0 {
+            WindowEvent::PointerPressed {
+                position,
+                button: _,
+            } => {
+                defmt::write!(fmt, "PointerPressed x={}, y={}", position.x, position.y)
+            }
+            WindowEvent::PointerReleased {
+                position,
+                button: _,
+            } => {
+                defmt::write!(fmt, "PointerReleased x={}, y={}", position.x, position.y)
+            }
+            WindowEvent::PointerMoved { position } => {
+                defmt::write!(fmt, "PointerMoved x={}, y={}", position.x, position.y)
+            }
+            WindowEvent::PointerScrolled {
+                position: _,
+                delta_x: _,
+                delta_y: _,
+            } => defmt::write!(fmt, "PointerScrolled"),
+            WindowEvent::PointerExited => defmt::write!(fmt, "PointerExited"),
+            WindowEvent::KeyPressed { text: _ } => defmt::write!(fmt, "KeyPressed"),
+            WindowEvent::KeyPressRepeated { text: _ } => defmt::write!(fmt, "KeyPressRepeated"),
+            WindowEvent::KeyReleased { text: _ } => defmt::write!(fmt, "KeyReleased"),
+            WindowEvent::ScaleFactorChanged { scale_factor: _ } => {
+                defmt::write!(fmt, "ScaleFactorChanged")
+            }
+            WindowEvent::Resized { size: _ } => defmt::write!(fmt, "Resized"),
+            WindowEvent::CloseRequested => defmt::write!(fmt, "CloseRequested"),
+            WindowEvent::WindowActiveChanged(_) => defmt::write!(fmt, "WindowActiveChanged"),
+            _ => defmt::write!(fmt, "Unknown window event"),
+        }
+    }
+}
+
 fn evaluate_touch_data(
     touch_data: TouchData,
+    last_touch_data: Option<TouchData>,
     scale_factor: f32,
     mut touch_notified_to_ui: bool,
-) -> (bool, WindowEvent) {
+) -> (bool, Option<WindowEvent>) {
+    debug!("Touch {:?}", touch_data);
+
     let touch_position =
         slint::PhysicalPosition::new(touch_data.x as _, touch_data.y as _).to_logical(scale_factor);
     let event = if touch_data.is_touching {
         if !touch_notified_to_ui {
             touch_notified_to_ui = true;
-            slint::platform::WindowEvent::PointerPressed {
+            Some(slint::platform::WindowEvent::PointerPressed {
                 position: touch_position,
                 button: PointerEventButton::Left,
-            }
+            })
         } else {
-            slint::platform::WindowEvent::PointerMoved {
-                position: touch_position,
+            // Analyze touch input only in case of a change
+            if last_touch_data.is_some_and(|t| {
+                touch_data.x != t.x
+                    || touch_data.y != t.y
+                    || touch_data.is_touching != t.is_touching
+            }) {
+                Some(slint::platform::WindowEvent::PointerMoved {
+                    position: touch_position,
+                })
+            } else {
+                None
             }
         }
     } else {
         touch_notified_to_ui = false;
-        slint::platform::WindowEvent::PointerReleased {
+        Some(slint::platform::WindowEvent::PointerReleased {
             position: touch_position,
             button: PointerEventButton::Left,
-        }
+        })
     };
     (touch_notified_to_ui, event)
 }
@@ -402,7 +469,7 @@ async fn main(spawner: Spawner) {
     // Initialize the allocator BEFORE you use it
     {
         use core::mem::MaybeUninit;
-        const HEAP_SIZE: usize = 24 * 1024;
+        const HEAP_SIZE: usize = 32 * 1024;
         static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
         unsafe { HEAP.init(addr_of_mut!(HEAP_MEM) as usize, HEAP_SIZE) }
     }

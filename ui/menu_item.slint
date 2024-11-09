@@ -1,0 +1,47 @@
+
+import { ProgressIndicator, Spinner, Slider, Switch, ListView, GroupBox, ScrollView } from "std-widgets.slint";
+
+export component MenuItem inherits TouchArea {
+    property <color> background_color: #dcd9d9;
+    in property <string> title;
+    in property <image> icon;
+    in property <length> icon_size;
+    pointer-event(event) => {
+        if event.kind == PointerEventKind.down {
+            i.background = #00FF00;
+        } else if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+            i.background = background_color;
+        }
+    }
+    Rectangle {
+        HorizontalLayout {
+            alignment: start;
+            i := Rectangle {
+                background: background_color;
+                border-radius: self.height / 2;
+                HorizontalLayout {
+                    alignment: start;
+                    padding: 1px;
+                    padding-left: 7px;
+                    padding-right: 7px;
+                    spacing: icon_size * 0.25;
+                    img := Image {
+                        preferred-width: icon_size;
+                        preferred-height: icon_size;
+                        width: icon_size;
+                        source: icon;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: title;
+                        font-size: 24px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}

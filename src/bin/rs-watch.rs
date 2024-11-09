@@ -520,7 +520,7 @@ async fn main(spawner: Spawner) {
     unwrap!(spawner.spawn(ui_task_runner(display_hw, touch_hw)));
 
     loop {
-        debug!("Main loop has still nothing to do...");
+        trace!("Main loop has still nothing to do...");
         Timer::after_secs(10).await;
     }
 }

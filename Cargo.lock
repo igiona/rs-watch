@@ -720,6 +720,9 @@ name = "display-interface"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ba2aab1ef3793e6f7804162debb5ac5edb93b3d650fbcc5aeb72fcd0e6c03a0"
+dependencies = [
+ "defmt",
+]
 
 [[package]]
 name = "display-interface-spi"
@@ -2583,6 +2586,7 @@ dependencies = [
  "cortex-m-rt",
  "defmt",
  "defmt-rtt",
+ "display-interface",
  "embassy-executor",
  "embassy-futures",
  "embassy-net",

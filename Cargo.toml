@@ -37,6 +37,7 @@ embedded-graphics = "0.8.1"
 gc9a01-rs = "0.4.2"
 embedded-hal = "1.0.0"
 embedded-hal-bus = "0.2.0"
+display-interface = { version = "0.5.0", features = ["defmt-03"] }
 # This crate supports the display GC9A01 too, but I prefer to go with the embedded-graphics for now.
 # Maybe a performance comparison would be interesting
 # mipidsi = "0.8.0"

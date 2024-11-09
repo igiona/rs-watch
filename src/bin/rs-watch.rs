@@ -122,6 +122,15 @@ fn set_display_brightness(pwm: &mut SimplePwm<'_, PWM0>, brightness_pct: u8) {
     pwm.set_duty(0, duty);
 }
 
+const DISPLAY_WIDTH: u32 = 240;
+const DISPLAY_HEIGHT: u32 = 240;
+const DISPLAY_FRAME_BUFFER_LENGTH: usize = (DISPLAY_WIDTH * DISPLAY_HEIGHT) as usize;
+
+static mut DISPLAY_BUF1: [Rgb565Pixel; DISPLAY_FRAME_BUFFER_LENGTH] =
+    [Rgb565Pixel(0); DISPLAY_FRAME_BUFFER_LENGTH];
+static mut DISPLAY_BUF2: [Rgb565Pixel; DISPLAY_FRAME_BUFFER_LENGTH] =
+    [Rgb565Pixel(0); DISPLAY_FRAME_BUFFER_LENGTH];
+
 #[embassy_executor::task]
 pub async fn ui_task_runner(
     display_hw: DisplayHardwareInterface<'static>,
@@ -233,10 +242,16 @@ pub async fn ui_task_runner(
 
     info!("Setting windows size...");
 
-    const DISPLAY_WIDTH: u32 = 240;
-    const DISPLAY_HEIGHT: u32 = 240;
     let mut line_buffer =
         [slint::platform::software_renderer::Rgb565Pixel(0); DISPLAY_WIDTH as usize];
+
+    let mut currently_displayed_buffer: &mut [_] = unsafe { &mut DISPLAY_BUF1 };
+    let mut work_buffer: &mut [_] = unsafe { &mut DISPLAY_BUF2 };
+
+    for i in 0..DISPLAY_FRAME_BUFFER_LENGTH {
+        work_buffer[i].0 = 0x00_1Fu16;
+        currently_displayed_buffer[i].0 = 0xF800u16;
+    }
 
     window.set_size(slint::PhysicalSize::new(DISPLAY_WIDTH, DISPLAY_HEIGHT));
 
@@ -252,10 +267,39 @@ pub async fn ui_task_runner(
         let tasks = select(touch_controller.wait_event(), async {
             // Draw the scene if something needs to be drawn.
             window.draw_if_needed(|renderer| {
-                renderer.render_by_line(DisplayWrapper {
-                    display: &mut display,
-                    line_buffer: &mut line_buffer,
-                });
+                // while is_swap_pending() {}
+
+                // #[cfg(any())]
+                #[cfg(all())]
+                {
+                    renderer.render(work_buffer, DISPLAY_WIDTH as usize);
+
+                    let buf =
+                        unsafe { core::mem::transmute::<&[Rgb565Pixel], &[u16]>(work_buffer) };
+                    warn!("Rendering buf {}", buf.as_ptr());
+
+                    let mut p = work_buffer.iter().map(|p| p.0);
+
+                    if let Err(e) = display.set_pixels((0, 0), display.bounds(), &mut p) {
+                        error!("Draw error: {}", e);
+                    } else {
+                        // Swap the buffer references for our next iteration
+                        // (this just swap the reference, not the actual data)
+                        core::mem::swap::<&mut [_]>(
+                            &mut work_buffer,
+                            &mut currently_displayed_buffer,
+                        );
+                    }
+                }
+
+                #[cfg(any())]
+                // #[cfg(all())]
+                {
+                    renderer.render_by_line(DisplayWrapper {
+                        display: &mut display,
+                        line_buffer: &mut line_buffer,
+                    });
+                }
             });
 
             let sleep_duration = if !window.has_active_animations() {
@@ -276,7 +320,7 @@ pub async fn ui_task_runner(
             Timer::after(sleep_duration.unwrap_or({
                 // If Slint doesn't give us time,
                 // we give embassy anyways some time to do other stuff at the cost of a slightly less responsive UI
-                Duration::from_millis(3)
+                Duration::from_millis(30)
             }))
             .await;
         });

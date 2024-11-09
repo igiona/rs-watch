@@ -45,7 +45,7 @@ bind_interrupts!(struct Irqs {
     SERIAL0 => uarte::InterruptHandler<peripherals::SERIAL0>;
     SERIAL1  => twim::InterruptHandler<peripherals::SERIAL1>;
     SERIAL2  => twim::InterruptHandler<peripherals::SERIAL2>;
-    SERIAL3  => spim::InterruptHandler<peripherals::SERIAL3>;
+    SPIM4  => spim::InterruptHandler<peripherals::SPIM4>;
 });
 
 #[global_allocator]
@@ -162,7 +162,7 @@ pub async fn ui_task_runner(
     let mut config = spim::Config::default();
     config.frequency = spim::Frequency::M32;
     config.mode = spim::MODE_0;
-    let spim: spim::Spim<'_, peripherals::SERIAL3> = spim::Spim::new_txonly(
+    let spim: spim::Spim<'_, peripherals::SPIM4> = spim::Spim::new_txonly(
         display_hw.spi,
         Irqs,
         display_hw.clk,
@@ -388,7 +388,7 @@ struct DisplayHardwareInterface<'a> {
     dc: AnyPin,
     mosi: AnyPin,
     clk: AnyPin,
-    spi: PeripheralRef<'a, peripherals::SERIAL3>,
+    spi: PeripheralRef<'a, peripherals::SPIM4>,
 }
 
 struct TouchHardwareInterface<'a> {
@@ -482,11 +482,6 @@ async fn main(spawner: Spawner) {
         Err(_) => warn!("nPM module not found!"),
     };
 
-    info!("Configuring SPI");
-
-    let mut config = spim::Config::default();
-    config.frequency = spim::Frequency::M32;
-
     let touch_int: gpiote::InputChannel<'_> = gpiote::InputChannel::new(
         p.GPIOTE_CH0,
         gpio::Input::new(p.P1_00, Pull::Up),
@@ -506,7 +501,7 @@ async fn main(spawner: Spawner) {
         dc: p.P0_11.degrade(),
         mosi: p.P0_09.degrade(),
         clk: p.P0_08.degrade(),
-        spi: p.SERIAL3.into_ref(),
+        spi: p.SPIM4.into_ref(),
     };
 
     let touch_hw = TouchHardwareInterface {

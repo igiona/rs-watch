@@ -203,14 +203,12 @@ pub async fn ui_task_runner(
         interface,
         DisplayResolution240x240,
         DisplayRotation::Rotate180,
-    )
-    .into_buffered_graphics();
+    );
 
     info!("Resetting display...");
     display.reset(&mut display_reset, &mut delay).unwrap();
     info!("Initializing...");
     display.init(&mut delay).unwrap();
-    display.flush().unwrap();
 
     info!("Creating UI...");
 
@@ -258,7 +256,6 @@ pub async fn ui_task_runner(
                     display: &mut display,
                     line_buffer: &mut line_buffer,
                 });
-                display.flush().unwrap();
             });
 
             let sleep_duration = if !window.has_active_animations() {

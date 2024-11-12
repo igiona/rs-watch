@@ -6,12 +6,14 @@ export component RsWatchUi inherits Window {
     callback menu_item_click(string);
     height: 240px;
     width: 240px;
+    property <int> current-page: 0;
     Rectangle {
         background: white;
         border-width: 1px;
         border-color: #ff0fd7;
         border-radius: root.height / 2;
         Flickable {
+            visible: current-page == 0;
             property <length> icon_size: 32px; // This has currently to match the SVG size :'(
             property <length> items_spacing: 12px;
             vertical-stretch: 0;
@@ -29,6 +31,7 @@ export component RsWatchUi inherits Window {
                     icon_size: icon_size;
                     clicked => {
                         menu_item_click(self.title);
+                        current-page = 1;
                     }
                 }
 
@@ -87,15 +90,16 @@ export component RsWatchUi inherits Window {
                 }
             }
         }
-/*
+
         VerticalLayout {
+            visible: current-page == 1;
             alignment: end;
             Rectangle {
                 ProgressIndicator {
                     height: 10px;
                     preferred-width: 80px;
                     // indeterminate: true;
-                    progress: s.value / 100;
+                    progress: brightness-slider.value / 100;
                 }
             }
 
@@ -113,7 +117,7 @@ export component RsWatchUi inherits Window {
 
                 Rectangle {
                     width: 70%;
-                    s := Slider {
+                    brightness_slider := Slider {
                         width: 100%;
                     }
                 }
@@ -127,9 +131,9 @@ export component RsWatchUi inherits Window {
                 spacing: 10px;
                 Text {
                     font-size: 80px;
-                    text: s.value.round();
+                    text: brightness_slider.value.round();
                 }
             }
-        }*/
+        }
     }
 }

@@ -1,0 +1,50 @@
+import { ProgressIndicator, Switch, Slider } from "std-widgets.slint";
+import { Page } from "page.slint";
+
+export component SettingsPage inherits Page {
+    callback brightness_changed <=> brightness-slider.changed;
+    // visible: active;
+    VerticalLayout {
+        alignment: end;
+        Rectangle {
+            ProgressIndicator {
+                height: 10px;
+                preferred-width: 80px;
+            // indeterminate: true;
+                progress: brightness-slider.value / 100;
+            }
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            height: 60px;
+            Switch {
+                text: "Test";
+            }
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            Rectangle { /* Filler */ }
+
+            Rectangle {
+                width: 70%;
+                brightness-slider := Slider {
+                    width: 100%;
+                }
+            }
+
+            Rectangle { /* Filler */ }
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            padding: 5px;
+            spacing: 10px;
+            Text {
+                font-size: 80px;
+                text: brightness-slider.value.round();
+            }
+        }
+    }
+}

@@ -1,0 +1,41 @@
+
+import { ProgressIndicator, Spinner, Slider, Switch, ListView, GroupBox } from "std-widgets.slint";
+
+export component Page inherits SwipeGestureHandler {
+    callback back();
+    in property <bool> active: false;
+    states [
+        shown when active: {
+            x: 0px;
+            in {
+                animate x {
+                    duration: 500ms;
+                    easing: ease-in-expo;
+                }
+            }
+            out {
+                animate x {
+                    duration: 500ms;
+                    easing: ease-out-expo;
+                }
+            }
+        }
+        hidden when !active: {
+            x: -240px;
+        }
+    ]
+    preferred-height: 100%;
+    preferred-width: 100%;
+    horizontal-stretch: 1;
+    vertical-stretch: 1;
+    handle-swipe-left: true;
+    swiped => {
+        // If a left-swipe is starting from the very edge (minus a tolerance)
+        // and it lasts for more than 1/4 of the display
+        // Then it's back-gesture
+        if self.pressed-position.x > (self.width - 30px) && self.current-position.x < self.pressed-position.x - self.width / 4 {
+            back();
+        }
+    }
+    @children
+}

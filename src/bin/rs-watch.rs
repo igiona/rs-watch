@@ -241,7 +241,7 @@ pub async fn ui_task_runner(
     let ui = ui.expect("Unable to create the main window");
 
     // ... setup callback and properties on `ui` ...
-    ui.on_menu_item_click(|i| info!("Clicked menu {}", i.as_str()));
+    ui.on_menu_item_click(|i| info!("Clicked menu #{}", i));
     ui.on_brightness_setting_changed(|b| {
         UI_REQUESTS_CHANNEL
             .try_send(UiOperationRequestsMessage::SetBrightness {

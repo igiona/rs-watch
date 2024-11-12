@@ -242,6 +242,13 @@ pub async fn ui_task_runner(
 
     // ... setup callback and properties on `ui` ...
     ui.on_menu_item_click(|i| info!("Clicked menu {}", i.as_str()));
+    ui.on_brightness_setting_changed(|b| {
+        UI_REQUESTS_CHANNEL
+            .try_send(UiOperationRequestsMessage::SetBrightness {
+                brightness_pct: b.max(1f32).min(90f32) as u8,
+            })
+            .expect("Could not queue the SetBrightness message"); // TODO do better error handling here
+    });
 
     info!("Setting windows size...");
 
@@ -498,7 +505,7 @@ async fn main(spawner: Spawner) {
     // Initialize the allocator BEFORE you use it
     {
         use core::mem::MaybeUninit;
-        const HEAP_SIZE: usize = 32 * 1024;
+        const HEAP_SIZE: usize = 40 * 1024;
         static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
         unsafe { HEAP.init(addr_of_mut!(HEAP_MEM) as usize, HEAP_SIZE) }
     }

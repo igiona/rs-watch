@@ -4,6 +4,7 @@ import { MenuItem } from "menu_item.slint";
 
 export component RsWatchUi inherits Window {
     callback menu_item_click(string);
+    callback brightness_setting_changed <=> brightness_slider.changed;
     height: 240px;
     width: 240px;
     property <int> current-page: 0;

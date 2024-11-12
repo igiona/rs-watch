@@ -9,7 +9,7 @@ use core::ptr::addr_of_mut;
 use cst816s::{Cst816s, TouchData};
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_futures::select::{self, select};
+use embassy_futures::select::{self, select3};
 use embassy_nrf::gpio::{self, AnyPin, Output, Pin as _, Pull};
 use embassy_nrf::gpiote;
 use embassy_nrf::pac::reset::{self};
@@ -18,6 +18,8 @@ use embassy_nrf::pwm::SimplePwm;
 use embassy_nrf::twim::{Frequency, Twim};
 use embassy_nrf::{self, pac, pwm, twim};
 use embassy_nrf::{bind_interrupts, spim, uarte, Peripheral, PeripheralRef};
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::channel::Channel;
 use embassy_time::{Delay, Duration, Instant, Timer};
 use embedded_alloc::LlffHeap as Heap;
 
@@ -122,6 +124,12 @@ fn set_display_brightness(pwm: &mut SimplePwm<'_, PWM0>, brightness_pct: u8) {
     pwm.set_duty(0, duty);
 }
 
+#[derive(Clone, Copy, Debug, Format)]
+pub(crate) enum UiOperationRequestsMessage {
+    // Change the display brightness
+    SetBrightness { brightness_pct: u8 },
+}
+
 #[embassy_executor::task]
 pub async fn ui_task_runner(
     display_hw: DisplayHardwareInterface<'static>,
@@ -212,6 +220,9 @@ pub async fn ui_task_runner(
 
     info!("Creating UI...");
 
+    static UI_REQUESTS_CHANNEL: Channel<ThreadModeRawMutex, UiOperationRequestsMessage, 8> =
+        Channel::new();
+
     // Note that we use `ReusedBuffer` as parameter for MinimalSoftwareWindow to indicate
     // that we just need to re-render what changed since the last frame.
     // What's shown on the screen buffer is not in our RAM, but actually within the display itself.
@@ -254,108 +265,126 @@ pub async fn ui_task_runner(
         // Let Slint run the timer hooks and update animations.
         slint::platform::update_timers_and_animations();
 
-        let tasks = select(touch_controller.wait_event(), async {
-            // Draw the scene if something needs to be drawn.
-            window.draw_if_needed(|renderer| {
-                renderer.render_by_line(DisplayWrapper {
-                    display: &mut display,
-                    line_buffer: &mut line_buffer,
+        let tasks = select3(
+            touch_controller.wait_event(),
+            async {
+                // Draw the scene if something needs to be drawn.
+                window.draw_if_needed(|renderer| {
+                    renderer.render_by_line(DisplayWrapper {
+                        display: &mut display,
+                        line_buffer: &mut line_buffer,
+                    });
                 });
-            });
 
-            let sleep_duration = if !window.has_active_animations() {
-                // Try to put the MCU to sleep
-                if let Some(duration) = slint::platform::duration_until_next_timer_update() {
-                    debug!(
-                        "Sleep until next UI update in {}ms...",
-                        duration.as_millis()
-                    );
-                    Some(Duration::from_millis(duration.as_millis() as u64))
+                let sleep_duration = if !window.has_active_animations() {
+                    // Try to put the MCU to sleep
+                    if let Some(duration) = slint::platform::duration_until_next_timer_update() {
+                        debug!(
+                            "Sleep until next UI update in {}ms...",
+                            duration.as_millis()
+                        );
+                        Some(Duration::from_millis(duration.as_millis() as u64))
+                    } else {
+                        None
+                    }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
 
-            Timer::after(sleep_duration.unwrap_or({
-                // If Slint doesn't give us time,
-                // we give embassy anyways some time to do other stuff at the cost of a slightly less responsive UI
-                Duration::from_millis(3)
-            }))
-            .await;
-        });
+                Timer::after(sleep_duration.unwrap_or({
+                    // If Slint doesn't give us time,
+                    // we give embassy anyways some time to do other stuff at the cost of a slightly less responsive UI
+                    Duration::from_millis(3)
+                }))
+                .await;
+            },
+            UI_REQUESTS_CHANNEL.receive(),
+        );
 
-        if let select::Either::First(result) = tasks.await {
-            match result {
-                Ok(touch_data) => {
-                    let event: Option<WindowEvent>;
-                    (touch_notified_to_ui, event) = evaluate_touch_data(
-                        touch_data,
-                        last_touch_data,
-                        window.scale_factor(),
-                        touch_notified_to_ui,
-                    );
-                    last_touch_data = Some(touch_data);
-                    if touch_data.is_touching {
-                        if let Some(WindowEvent::PointerPressed {
-                            position: _,
-                            button: _,
-                        }) = event
-                        {
-                            first_touch_event = Some(Instant::now());
-                        }
-                        if let Some(WindowEvent::PointerMoved { position: _ }) = event {
-                            if let Some(first_touch_event) = first_touch_event {
-                                let i = Instant::now()
-                                    .checked_duration_since(first_touch_event)
-                                    .unwrap();
-                                info!("Delta T {}ms", i.as_millis());
+        let select_result = tasks.await;
+
+        match select_result {
+            select::Either3::First(result) => {
+                match result {
+                    Ok(touch_data) => {
+                        let event: Option<WindowEvent>;
+                        (touch_notified_to_ui, event) = evaluate_touch_data(
+                            touch_data,
+                            last_touch_data,
+                            window.scale_factor(),
+                            touch_notified_to_ui,
+                        );
+                        last_touch_data = Some(touch_data);
+                        if touch_data.is_touching {
+                            if let Some(WindowEvent::PointerPressed {
+                                position: _,
+                                button: _,
+                            }) = event
+                            {
+                                first_touch_event = Some(Instant::now());
                             }
-                            first_touch_event = None;
+                            if let Some(WindowEvent::PointerMoved { position: _ }) = event {
+                                if let Some(first_touch_event) = first_touch_event {
+                                    let i = Instant::now()
+                                        .checked_duration_since(first_touch_event)
+                                        .unwrap();
+                                    info!("Delta T {}ms", i.as_millis());
+                                }
+                                first_touch_event = None;
+                            }
+                            last_touch_instant = Some(Instant::now());
+                        } else {
+                            last_touch_instant = None;
                         }
-                        last_touch_instant = Some(Instant::now());
-                    } else {
-                        last_touch_instant = None;
-                    }
-                    if let Some(event) = event {
-                        info!("Event {}", PrintableWindowEvent(&event));
-                        window.dispatch_event(event);
-                    }
-                }
-                Err(e) => error!("Touch read error => {}", e),
-            };
-        } else if let Some(touch_instant) = last_touch_instant {
-            // Check if the touch wasn't released for long, it seems like we miss interrupts.
-            // In this way we can be sure that we properly detect release actions.
-            if Instant::now()
-                .checked_duration_since(touch_instant)
-                .unwrap_or(Duration::from_secs(0))
-                > Duration::from_millis(100)
-            {
-                if let Ok(touch_data) = touch_controller.read_touch_data() {
-                    let event: Option<WindowEvent>;
-                    (touch_notified_to_ui, event) = evaluate_touch_data(
-                        touch_data,
-                        last_touch_data,
-                        window.scale_factor(),
-                        touch_notified_to_ui,
-                    );
-                    match event {
-                        Some(WindowEvent::PointerReleased {
-                            position: _,
-                            button: _,
-                        }) => {
-                            warn!("It appears we did really miss the release event");
-                            window.dispatch_event(event.expect("Safe thanks to the prev. checks"));
-                        }
-                        _ => {
-                            debug!("It appears that we didn't miss the release event after all...");
+                        if let Some(event) = event {
+                            debug!("Event {}", PrintableWindowEvent(&event));
+                            window.dispatch_event(event);
                         }
                     }
-                    last_touch_instant = None;
+                    Err(e) => error!("Touch read error => {}", e),
+                };
+            }
+            select::Either3::Second(_) => {
+                if let Some(touch_instant) = last_touch_instant {
+                    // Check if the touch wasn't released for long, it seems like we miss interrupts.
+                    // In this way we can be sure that we properly detect release actions.
+                    if Instant::now()
+                        .checked_duration_since(touch_instant)
+                        .unwrap_or(Duration::from_secs(0))
+                        > Duration::from_millis(100)
+                    {
+                        if let Ok(touch_data) = touch_controller.read_touch_data() {
+                            let event: Option<WindowEvent>;
+                            (touch_notified_to_ui, event) = evaluate_touch_data(
+                                touch_data,
+                                last_touch_data,
+                                window.scale_factor(),
+                                touch_notified_to_ui,
+                            );
+                            match event {
+                                Some(WindowEvent::PointerReleased {
+                                    position: _,
+                                    button: _,
+                                }) => {
+                                    warn!("It appears we did really miss the release event");
+                                    window.dispatch_event(
+                                        event.expect("Safe thanks to the prev. checks"),
+                                    );
+                                }
+                                _ => {
+                                    debug!("It appears that we didn't miss the release event after all...");
+                                }
+                            }
+                            last_touch_instant = None;
+                        }
+                    }
                 }
             }
+            select::Either3::Third(op) => match op {
+                UiOperationRequestsMessage::SetBrightness { brightness_pct } => {
+                    set_display_brightness(&mut backlight, brightness_pct)
+                }
+            },
         }
     }
 }

@@ -59,7 +59,7 @@ probe-rs download --chip nRF5340_xxAA --binary-format hex --probe 1209:4853 bina
 
 In order to build & run the code for the DK:
 ```shell
-cargo run --bin rs-watch --release
+cargo run --release
 
 ```
 ## nrf5340-DK
@@ -82,7 +82,7 @@ Therefore these pins are mapped slightly differently as the ZSWatch-HW.
 ### Build and run
 In order to build & run the code for the DK:
 ```shell
-cargo run --bin rs-watch --release --no-default-features --features hw-board-dk
+cargo run --release --no-default-features --features hw-board-dk
 ```
 
 Now, you can perform the standard `cargo run` command to flash the application core (the `chip` and other parameters are stored in `.cargo/config.toml` as default):

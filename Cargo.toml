@@ -44,6 +44,9 @@ embedded-hal-bus = "0.2.0"
 
 [profile.release]
 debug = 2
+[profile.dev]
+opt-level = 1               # Use slightly better optimizations.
+overflow-checks = false     # Disable integer overflow checks.
 
 [build-dependencies]
 # slint-build = "1.8.0"

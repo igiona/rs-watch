@@ -51,6 +51,14 @@ impl fmt::Display for Gesture {
     }
 }
 
+#[derive(Debug, Clone, Copy, defmt::Format)]
+pub enum TouchRotation {
+    Rotate0,
+    Rotate90,
+    Rotate180,
+    Rotate270,
+}
+
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, defmt::Format)]
 pub struct TouchData {
     pub x: u16,
@@ -62,7 +70,7 @@ pub struct TouchData {
 impl TouchData {
     // TODO - make a proper wrapper type
     // add Event, TouchId, Pressure
-    fn from_le_bytes(bytes: &[u8; 7]) -> Self {
+    fn from_le_bytes(bytes: &[u8; 7], rotation: TouchRotation, width: u16, height: u16) -> Self {
         let gesture = Gesture::from_u8(bytes[1]);
         let num_touch_points = bytes[2] & 0x0F;
         let x_msb = bytes[3] & 0x0F;
@@ -71,6 +79,14 @@ impl TouchData {
         let y_msb = bytes[5] & 0x0F;
         let y_lsb = bytes[6];
         let y = (y_lsb as u16) | ((y_msb as u16) << 8);
+
+        let (x, y) = match rotation {
+            TouchRotation::Rotate0 => (x, y),
+            TouchRotation::Rotate90 => (height - y, x),
+            TouchRotation::Rotate180 => (width - x, height - y),
+            TouchRotation::Rotate270 => (y, width - x),
+        };
+
         TouchData {
             x,
             y,
@@ -100,6 +116,9 @@ where
     reset_pin: Output<'a>,
     int_channel: gpiote::InputChannel<'a>,
     buffer: [u8; 7],
+    rotation: TouchRotation,
+    width: u16,
+    height: u16,
 }
 
 impl<'a, TWIM> Cst816s<'a, TWIM>
@@ -111,6 +130,9 @@ where
         twim: Twim<'a, TWIM>,
         reset_pin: Output<'a>,
         int_channel: gpiote::InputChannel<'a>,
+        rotation: TouchRotation,
+        width: u16,
+        height: u16,
     ) -> Self {
         Cst816s {
             slave_address: salve_address,
@@ -118,6 +140,9 @@ where
             reset_pin,
             int_channel,
             buffer: [0; 7],
+            rotation,
+            width,
+            height,
         }
     }
 
@@ -163,7 +188,12 @@ where
             DEFAULT_READ_TIMEOUT,
         ) {
             Err(e) => Err(e),
-            Ok(()) => Ok(TouchData::from_le_bytes(&self.buffer)),
+            Ok(()) => Ok(TouchData::from_le_bytes(
+                &self.buffer,
+                self.rotation,
+                self.width,
+                self.height,
+            )),
         }
     }
 

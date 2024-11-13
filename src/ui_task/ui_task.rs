@@ -38,8 +38,8 @@ bind_interrupts!(struct Irqs {
     SPIM4  => spim::InterruptHandler<peripherals::SPIM4>;
 });
 
-const DISPLAY_WIDTH: u32 = 240;
-const DISPLAY_HEIGHT: u32 = 240;
+const DISPLAY_WIDTH: u16 = 240;
+const DISPLAY_HEIGHT: u16 = 240;
 
 struct RsWatchPlatform {
     window: alloc::rc::Rc<MinimalSoftwareWindow>,
@@ -137,6 +137,12 @@ pub async fn ui_task_runner(
 
     let interface = SPIDisplayInterface::new(exclusive_spim, display_dc);
 
+    let mut display = Gc9a01::new(
+        interface,
+        DisplayResolution240x240,
+        DisplayRotation::Rotate180,
+    );
+
     let mut config = twim::Config::default();
     config.frequency = Frequency::K400;
     // config.scl_pullup = true;
@@ -144,7 +150,15 @@ pub async fn ui_task_runner(
     config.scl_high_drive = true;
     config.sda_high_drive = true;
     let i2c = twim::Twim::new(touch_hw.i2c, Irqs, touch_hw.sda, touch_hw.scl, config);
-    let mut touch_controller = Cst816s::new(touch_hw.address, i2c, touch_reset, touch_hw.int);
+    let mut touch_controller = Cst816s::new(
+        touch_hw.address,
+        i2c,
+        touch_reset,
+        touch_hw.int,
+        display.get_screen_rotation().into(),
+        DISPLAY_WIDTH,
+        DISPLAY_HEIGHT,
+    );
 
     let mut delay = Delay;
 
@@ -155,12 +169,6 @@ pub async fn ui_task_runner(
     if let Err(e) = touch_controller.init(&mut delay) {
         error!("Failed to initialized the touch controller! => {}", e);
     }
-
-    let mut display = Gc9a01::new(
-        interface,
-        DisplayResolution240x240,
-        DisplayRotation::Rotate180,
-    );
 
     info!("Resetting display...");
     display.reset(&mut display_reset, &mut delay).unwrap();
@@ -204,7 +212,10 @@ pub async fn ui_task_runner(
     let mut touch_handler = TouchHandler::new(window.clone());
     info!("Setting windows size...");
 
-    window.set_size(slint::PhysicalSize::new(DISPLAY_WIDTH, DISPLAY_HEIGHT));
+    window.set_size(slint::PhysicalSize::new(
+        DISPLAY_WIDTH as u32,
+        DISPLAY_HEIGHT as u32,
+    ));
 
     info!("Backlight on...");
     set_display_brightness(&mut backlight, 80);

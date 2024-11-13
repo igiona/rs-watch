@@ -1,5 +1,19 @@
 use defmt::{Format, Formatter};
+use gc9a01::prelude::DisplayRotation;
 use slint::platform::WindowEvent;
+
+use crate::cst816s::TouchRotation;
+
+impl From<DisplayRotation> for TouchRotation {
+    fn from(value: DisplayRotation) -> Self {
+        match value {
+            DisplayRotation::Rotate0 => TouchRotation::Rotate180,
+            DisplayRotation::Rotate90 => TouchRotation::Rotate270,
+            DisplayRotation::Rotate180 => TouchRotation::Rotate0,
+            DisplayRotation::Rotate270 => TouchRotation::Rotate90,
+        }
+    }
+}
 
 pub(super) struct PrintableWindowEvent<'a>(pub(super) &'a WindowEvent);
 impl<'a> Format for PrintableWindowEvent<'a> {

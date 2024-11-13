@@ -23,7 +23,7 @@ Whenever needed, updates and fixes are done to best suite the `async` nature of 
 - [ ] Power management
 - [ ] ... and more
 
-TODO video
+Videos and other media of the current development state can be found in the [Wiki page](https://github.com/igiona/rs-watch/wiki/rs%E2%80%90watch-development-state) of this repo.
 
 # Development
 

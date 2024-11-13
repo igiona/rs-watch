@@ -7,6 +7,10 @@
         "editor.defaultFormatter": "rust-lang.rust-analyzer",
         "editor.formatOnSave": true
     },
+    "[markdown]": {
+        "editor.defaultFormatter": "yzhang.markdown-all-in-one",
+        "editor.formatOnSave": true
+    },
     "workbench.colorCustomizations": {
         "activityBar.background": "#252D44",
         "titleBar.activeBackground": "#333F5F",

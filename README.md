@@ -32,7 +32,7 @@ Videos and other media of the current development state can be found in the [Wik
 
 ```shell
 rustup target add thumbv8m.main-none-eabihf
-cargo install probe-rs
+cargo install probe-rs-tools
 ```
 
 Required VsCode slint extension:
